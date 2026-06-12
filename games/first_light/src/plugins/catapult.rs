@@ -14,7 +14,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::masonry::{PreTickVelocity, Projectile};
-use super::terrain::{CASTLE_CENTER, terrain_height};
+use super::terrain::{CASTLE_CENTER, KNOLL_CENTER, terrain_height};
 use super::world::Respawnable;
 use engine::prelude::*;
 
@@ -25,6 +25,27 @@ impl Plugin for CatapultPlugin {
         app.init_resource::<Manning>()
             .init_resource::<ShotCamera>()
             .add_systems(Startup, (setup_assets, spawn_catapult).chain());
+
+        // Headless verification: `FL_AUTO_MAN=<frame>` mans the catapult so
+        // screenshots show the aiming view, trajectory arc, and chase camera.
+        if let Some(at_frame) = std::env::var("FL_AUTO_MAN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+        {
+            app.add_systems(
+                Update,
+                move |mut frame: Local<u32>,
+                      mut manning: ResMut<Manning>,
+                      catapults: Query<Entity, With<Catapult>>| {
+                    *frame += 1;
+                    if *frame == at_frame
+                        && let Some(catapult) = catapults.iter().next()
+                    {
+                        manning.0 = Some(catapult);
+                    }
+                },
+            );
+        }
 
         // Headless verification: `FL_AUTO_FIRE=<frame>[:<charge>]`.
         if let Ok(var) = std::env::var("FL_AUTO_FIRE") {
@@ -138,8 +159,8 @@ fn spring_acceleration(charge: f32) -> f32 {
 /// Seconds of held click for full charge.
 const WIND_TIME: f32 = 2.2;
 
-/// Where the catapult stands (meadow edge, clear shot at the castle).
-const POSITION: Vec2 = Vec2::new(16.0, 34.0);
+/// The catapult stands on the siege knoll, overlooking the castle.
+const POSITION: Vec2 = KNOLL_CENTER;
 
 #[derive(Resource)]
 struct CatapultAssets {
@@ -357,19 +378,17 @@ fn aim(
     root.rotation = Quat::from_rotation_y(current + delta.clamp(-max_step, max_step));
 }
 
-/// Release speed (m/s) the spring will deliver for a given charge.
-fn release_speed(charge: f32) -> f32 {
-    let sweep = (ARM_COCKED + charge * WIND_BACK) - ARM_RELEASE;
-    (2.0 * spring_acceleration(charge) * sweep).sqrt() * TIP_RADIUS
-}
-
-/// World-space release point and velocity for a given charge.
+/// World-space release point and velocity for a given charge. Used by both
+/// the trajectory preview and the actual release, so the arc is exact: the
+/// stone leaves from this pose with v = omega x r at the seat point.
 fn release_state(root: &Transform, charge: f32) -> (Vec3, Vec3) {
+    let sweep = (ARM_COCKED + charge * WIND_BACK) - ARM_RELEASE;
+    let angular_velocity = -(2.0 * spring_acceleration(charge) * sweep).sqrt();
     let arm_rot = Quat::from_rotation_x(ARM_RELEASE);
-    let position = root.translation + root.rotation * (PIVOT + arm_rot * SEAT);
-    let speed = release_speed(charge);
-    let direction = root.rotation * Vec3::new(0.0, ARM_RELEASE.cos(), ARM_RELEASE.sin());
-    (position, direction * speed)
+    let r = arm_rot * SEAT;
+    let position = root.translation + root.rotation * (PIVOT + r);
+    let velocity = root.rotation * (Vec3::X * angular_velocity).cross(r);
+    (position, velocity)
 }
 
 /// Wind-up, release, swing, stone hand-off, reset, reload.
@@ -387,9 +406,13 @@ fn wind_and_loose(
     let dt = time.delta_secs();
     for (entity, root, mut catapult) in &mut catapults {
         let manned = manning.0 == Some(entity);
-        // A click while watching the previous shot returns to aiming.
+        // A click while watching the previous shot returns to aiming
+        // (right-click works too and never starts a wind).
         let watching = manned && shot_camera.following.is_some();
-        if watching && buttons.just_pressed(MouseButton::Left) {
+        if watching
+            && (buttons.just_pressed(MouseButton::Left)
+                || buttons.just_pressed(MouseButton::Right))
+        {
             shot_camera.following = None;
             shot_camera.held_eye = None;
             shot_camera.rest_timer = 0.0;
@@ -425,12 +448,16 @@ fn wind_and_loose(
 
                     if !released && previous > ARM_RELEASE && catapult.angle <= ARM_RELEASE {
                         released = true;
-                        let (_, velocity) = release_state(root, catapult.charge);
+                        // Snap the stone to the exact release pose so the
+                        // flight matches the previewed arc at any frame rate.
+                        let (position, velocity) = release_state(root, catapult.charge);
                         for (stone_entity, seat) in &stones {
                             if seat.catapult != entity {
                                 continue;
                             }
                             commands.entity(stone_entity).remove::<SeatedStone>().insert((
+                                Transform::from_translation(position)
+                                    .with_rotation(root.rotation),
                                 (
                                     RigidBody::Dynamic,
                                     Collider::sphere(STONE_RADIUS),
@@ -544,17 +571,17 @@ fn catapult_camera(
             match stones.get(stone) {
                 Ok((stone_transform, velocity)) => {
                     let stone_pos = stone_transform.translation;
-                    // Linger after the stone stops so the collapse plays out.
+                    // Linger after the stone slows so the collapse plays
+                    // out; the timer never resets (rubble nudging the ball
+                    // must not re-capture the camera).
                     let speed = velocity.map(|v| v.length()).unwrap_or(0.0);
-                    if speed < 1.5 {
+                    if speed < 2.5 || shot_camera.rest_timer > 0.0 {
                         shot_camera.rest_timer += time.delta_secs();
                         if shot_camera.rest_timer > 4.0 {
                             shot_camera.following = None;
                             shot_camera.held_eye = None;
                             shot_camera.rest_timer = 0.0;
                         }
-                    } else {
-                        shot_camera.rest_timer = 0.0;
                     }
 
                     // Hold position approaching the castle: watch the hit
@@ -583,8 +610,9 @@ fn catapult_camera(
                 }
             }
         } else if let Ok(root) = catapults.get(active) {
-            // Behind and above the machine, looking down the aim line.
-            let eye = root.translation + root.rotation * Vec3::new(0.0, 7.5, 13.0);
+            // Behind, above, and a step to the side so the trajectory arc
+            // reads as a curve instead of an edge-on line.
+            let eye = root.translation + root.rotation * Vec3::new(3.5, 7.5, 13.5);
             let target = root.translation + root.rotation * Vec3::new(0.0, 3.0, -30.0);
             Some((eye, target))
         } else {

@@ -9,7 +9,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::terrain::{
-    CASTLE_CENTER, LAKE_CENTER, LAKE_RADIUS, PLAYGROUND_CENTER, terrain_height, terrain_normal,
+    CASTLE_CENTER, KNOLL_CENTER, LAKE_CENTER, LAKE_RADIUS, PLAYGROUND_CENTER, terrain_height,
+    terrain_normal,
 };
 
 pub struct VegetationPlugin;
@@ -34,6 +35,9 @@ fn clear_of_landmarks(x: f32, z: f32) -> bool {
         return false;
     }
     if p.distance(PLAYGROUND_CENTER) < 30.0 {
+        return false;
+    }
+    if p.distance(KNOLL_CENTER) < 38.0 {
         return false;
     }
     if p.distance(CASTLE_CENTER) < 105.0 {

@@ -33,6 +33,11 @@ pub const TERRACE_HEIGHT: f32 = 44.0;
 pub const PLAYGROUND_CENTER: Vec2 = Vec2::new(0.0, 60.0);
 const PLAYGROUND_FLAT_RADIUS: f32 = 22.0;
 const PLAYGROUND_BLEND_RADIUS: f32 = 40.0;
+/// Siege knoll: a raised flat-top hill with a commanding view of the castle.
+pub const KNOLL_CENTER: Vec2 = Vec2::new(52.0, 62.0);
+pub const KNOLL_HEIGHT: f32 = 12.0;
+const KNOLL_FLAT_RADIUS: f32 = 13.0;
+const KNOLL_BLEND_RADIUS: f32 = 36.0;
 /// Lake basin on the valley floor.
 pub const LAKE_CENTER: Vec2 = Vec2::new(-52.0, -10.0);
 pub const LAKE_RADIUS: f32 = 38.0;
@@ -151,6 +156,15 @@ pub fn terrain_height(x: f32, z: f32) -> f32 {
         PLAYGROUND_FLAT_RADIUS,
         PLAYGROUND_BLEND_RADIUS,
         0.0,
+    );
+    h = flatten(
+        h,
+        x,
+        z,
+        KNOLL_CENTER,
+        KNOLL_FLAT_RADIUS,
+        KNOLL_BLEND_RADIUS,
+        KNOLL_HEIGHT,
     );
     ramp(h, x, z)
 }
@@ -380,6 +394,18 @@ mod tests {
             assert!(
                 (h - TERRACE_HEIGHT).abs() < 0.25,
                 "castle footing floats/buried at ({dx}, {dz}): h={h:.2} vs terrace {TERRACE_HEIGHT}"
+            );
+        }
+    }
+
+    /// The siege knoll top must be flat for the catapult.
+    #[test]
+    fn knoll_is_flat() {
+        for (dx, dz) in [(0.0, 0.0), (8.0, 0.0), (0.0, -8.0), (-6.0, 6.0)] {
+            let h = terrain_height(KNOLL_CENTER.x + dx, KNOLL_CENTER.y + dz);
+            assert!(
+                (h - KNOLL_HEIGHT).abs() < 0.2,
+                "knoll not flat at ({dx}, {dz}): {h}"
             );
         }
     }
