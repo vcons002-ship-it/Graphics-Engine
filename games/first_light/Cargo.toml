@@ -1,0 +1,15 @@
+[package]
+name = "first_light"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# Dev loop: dynamic linking for fast rebuilds + dev tooling.
+dev = ["bevy/dynamic_linking", "dev_tools"]
+# Dev tooling alone (usable with --release for FPS measurements).
+dev_tools = ["engine/dev_tools"]
+
+[dependencies]
+bevy = { workspace = true }
+avian3d = { workspace = true }
+engine = { workspace = true }

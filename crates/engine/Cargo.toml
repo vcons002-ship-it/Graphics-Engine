@@ -1,0 +1,12 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# Tooling that ships with dev builds (FPS overlay). Off in plain release.
+dev_tools = ["bevy/bevy_dev_tools"]
+
+[dependencies]
+bevy = { workspace = true }
+avian3d = { workspace = true }
