@@ -517,7 +517,7 @@ fn catapult_camera(
     manning: Res<Manning>,
     mut shot_camera: ResMut<ShotCamera>,
     time: Res<Time>,
-    catapults: Query<&Transform, With<Catapult>>,
+    catapults: Query<&Transform, (With<Catapult>, Without<MainCamera>)>,
     players: Query<&Transform, (With<Player>, Without<Catapult>, Without<MainCamera>)>,
     stones: Query<(&Transform, Option<&LinearVelocity>), (With<Projectile>, Without<Player>, Without<Catapult>, Without<MainCamera>)>,
     mut cameras: Query<&mut Transform, With<MainCamera>>,
