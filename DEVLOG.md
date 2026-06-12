@@ -45,13 +45,32 @@
   for physically based ambient, per the official atmosphere example.
 - **AA path**: `Msaa::Off` + FXAA (one path only, matching the atmosphere
   example; MSAA/TAA/DLSS would conflict).
-- **Emissives** are scaled ×60 000 — daylight at ev100 13 needs huge
-  emissive values to bloom.
+- **Emissives**: daylight at ev100 13 needs large emissive values to bloom;
+  ×5 000 glows tastefully, ×60 000 produces flares that white out meters of
+  ground. Emissive props are scattered on the sun-facing side so their bloom
+  never sits inside the crate stack's shadow.
 - **`ENGINE_AUTO_SCREENSHOT=<frame>`** env var: capture at frame N and exit;
   used for headless visual verification (Xvfb + Mesa lavapipe) since this
   session ran in a Linux container without GPU/display.
 - This session ran on Linux; the Windows-specific Phase 0 (winget/MSVC) was
   skipped. Code is platform-neutral; nothing Windows-specific was needed.
+
+### The missing-shadows investigation (lesson for future sessions)
+
+Headless screenshots initially showed **no cast shadows**. A long bisection
+(crates/engine/examples/shadow_probe.rs, kept for reuse) cleared every
+suspect one by one: llvmpipe, cascade config, atmosphere, HDR/bloom/exposure,
+late camera decoration, Avian + TransformInterpolation, the player hierarchy,
+AtmosphereEnvironmentMapLight, and the FPS overlay — shadows rendered
+correctly in *every* probe. The real cause: two over-bright emissive props
+(×60 000) had deterministically scattered into the exact shadow corridor of
+the crate pyramid, and their bloom flares painted over the shadow in every
+screenshot; sun-angle diagnostics (near-overhead, backlit) also hid shadows
+geometrically. Confirmed by zeroing emissives → long, crisp golden-hour
+shadow. Morals: (1) verify with pixel measurements, not just eyeballs —
+PIL luminance bands settled it; (2) when bisecting visuals, change the
+*composition* (remove occluders) before suspecting the renderer; (3) a
+near-overhead sun is a useless shadow test — shadows hide under objects.
 
 ### Open items
 
