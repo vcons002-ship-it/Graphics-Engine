@@ -43,8 +43,8 @@ fn apply_render_defaults(
             Exposure { ev100: DEFAULT_EV100 },
             Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
             AtmosphereSettings::default(),
-            // Atmosphere drives ambient light and reflections (IBL).
-            AtmosphereEnvironmentMapLight::default(),
+            // TEMP DIAGNOSTIC: ambient disabled to check shadow rendering.
+            // AtmosphereEnvironmentMapLight::default(),
             Msaa::Off,
             Fxaa::default(),
         ));
