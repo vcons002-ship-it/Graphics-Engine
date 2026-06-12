@@ -23,24 +23,26 @@ impl Plugin for CatapultPlugin {
         app.init_resource::<Manning>()
             .add_systems(Startup, (setup_assets, spawn_catapult).chain());
 
-        // Headless verification: fire at full charge at the given frame.
-        if let Some(at_frame) = std::env::var("FL_AUTO_FIRE")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-        {
-            app.add_systems(
-                Update,
-                move |mut frame: Local<u32>, mut catapults: Query<&mut Catapult>| {
-                    *frame += 1;
-                    if *frame == at_frame {
-                        for mut catapult in &mut catapults {
-                            catapult.phase = Phase::Swinging;
-                            catapult.charge = 1.0;
-                            catapult.angular_velocity = 0.0;
+        // Headless verification: `FL_AUTO_FIRE=<frame>[:<charge>]` fires at
+        // the given frame with the given charge (default full).
+        if let Ok(var) = std::env::var("FL_AUTO_FIRE") {
+            let (frame_str, charge_str) = var.split_once(':').unwrap_or((var.as_str(), "1.0"));
+            let charge: f32 = charge_str.parse().unwrap_or(1.0);
+            if let Ok(at_frame) = frame_str.parse::<u32>() {
+                app.add_systems(
+                    Update,
+                    move |mut frame: Local<u32>, mut catapults: Query<&mut Catapult>| {
+                        *frame += 1;
+                        if *frame == at_frame {
+                            for mut catapult in &mut catapults {
+                                catapult.phase = Phase::Swinging;
+                                catapult.charge = charge;
+                                catapult.angular_velocity = 0.0;
+                            }
                         }
-                    }
-                },
-            );
+                    },
+                );
+            }
         }
         app
             .add_systems(
