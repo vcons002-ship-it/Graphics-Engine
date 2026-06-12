@@ -109,7 +109,7 @@ fn spawn_scattered_props(
             // flare whiting out the ground around it.
             1 => StandardMaterial {
                 base_color: Color::BLACK,
-                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 1_200.0,
+                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 180.0,
                 ..default()
             },
             // Rough diffuse.

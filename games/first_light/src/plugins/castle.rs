@@ -80,7 +80,7 @@ fn setup_castle_assets(
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         flame: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.6, 0.2),
-            emissive: LinearRgba::rgb(2.2, 1.0, 0.25) * 9_000.0,
+            emissive: LinearRgba::rgb(2.2, 1.0, 0.25) * 700.0,
             ..default()
         }),
         slate: materials.add(StandardMaterial {
@@ -95,7 +95,7 @@ fn setup_castle_assets(
         }),
         window: materials.add(StandardMaterial {
             base_color: Color::srgb(0.05, 0.04, 0.03),
-            emissive: LinearRgba::rgb(2.0, 1.2, 0.5) * 1_500.0,
+            emissive: LinearRgba::rgb(2.0, 1.2, 0.5) * 140.0,
             ..default()
         }),
         banner: materials.add(StandardMaterial {
