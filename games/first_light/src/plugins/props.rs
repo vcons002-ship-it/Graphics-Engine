@@ -82,10 +82,11 @@ fn spawn_scattered_props(
                 perceptual_roughness: 0.15,
                 ..default()
             },
-            // Emissive accent — bright enough to bloom in full daylight.
+            // Emissive accent — glows through bloom in daylight without the
+            // flare whiting out the ground around it.
             1 => StandardMaterial {
                 base_color: Color::BLACK,
-                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 60_000.0,
+                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 8_000.0,
                 ..default()
             },
             // Rough diffuse.
