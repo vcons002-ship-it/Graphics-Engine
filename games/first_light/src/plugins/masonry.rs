@@ -46,6 +46,7 @@ impl Plugin for MasonryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SupportQueue>()
             .init_resource::<FragmentCounter>()
+            .init_resource::<ImpactShake>()
             .add_systems(Startup, setup_masonry_assets)
             .add_systems(
                 FixedUpdate,
@@ -57,7 +58,8 @@ impl Plugin for MasonryPlugin {
                     fragment_budget,
                 )
                     .chain(),
-            );
+            )
+            .add_systems(Update, dust_motes);
     }
 }
 
@@ -88,6 +90,22 @@ pub const SLATE_TOUGHNESS: f32 = 35_000.0;
 /// Terminal rubble from a fractured block (sequence number for the budget).
 #[derive(Component)]
 pub struct Fragment(pub u64);
+
+/// Marks cone-shaped masonry (tower roofs): fragments outside the cone
+/// volume are skipped so debris forms a cone-shaped cloud, not a box.
+#[derive(Component)]
+pub struct ConeShape;
+
+/// Screen-shake trauma fed by heavy impacts; consumed by the camera.
+#[derive(Resource, Default)]
+pub struct ImpactShake(pub f32);
+
+/// Short-lived dust puff (no physics body — integrated by `dust_motes`).
+#[derive(Component)]
+struct DustMote {
+    velocity: Vec3,
+    life: f32,
+}
 
 /// Fast heavy objects that blast masonry on impact (catapult stones, thrown
 /// cubes). Must also carry `CollisionEventsEnabled`.
@@ -354,7 +372,9 @@ fn wake_block(
     enqueue_neighbors(queue, spatial, blocks, transform.translation, reach);
 }
 
-/// Replaces a block with 4–12 dynamic fragments that inherit its motion.
+/// Replaces a block with dynamic fragments (pieces no larger than ~1.1 m)
+/// that inherit its motion. Cone-shaped pieces (tower roofs) only spawn
+/// fragments inside the cone volume.
 #[allow(clippy::too_many_arguments)]
 fn fracture(
     commands: &mut Commands,
@@ -364,28 +384,37 @@ fn fracture(
     tally: &mut DestructionTally,
     spatial: &SpatialQuery,
     blocks: &Query<(&Transform, &RigidBody), With<MasonryBlock>>,
+    cones: &Query<(), With<ConeShape>>,
     entity: Entity,
     transform: &Transform,
     velocity: Vec3,
 ) {
     let size = transform.scale;
     let cracked = &assets.cracked[tint_index(transform.translation, assets.cracked.len())];
+    let is_cone = cones.contains(entity);
 
-    // Split each axis into pieces no larger than ~0.9 m, at most 2 splits.
-    let splits = |s: f32| ((s / 0.9).ceil() as usize).clamp(1, 2);
+    let splits = |s: f32| ((s / 1.1).ceil() as usize).clamp(1, 4);
     let (nx, ny, nz) = (splits(size.x), splits(size.y), splits(size.z));
     let piece = size / Vec3::new(nx as f32, ny as f32, nz as f32);
 
     for ix in 0..nx {
         for iy in 0..ny {
             for iz in 0..nz {
-                counter.next_seq += 1;
-                let jitter = 0.72 + ((counter.next_seq * 37 % 23) as f32 / 23.0) * 0.22;
-                let local = Vec3::new(
+                let normalized = Vec3::new(
                     (ix as f32 + 0.5) / nx as f32 - 0.5,
                     (iy as f32 + 0.5) / ny as f32 - 0.5,
                     (iz as f32 + 0.5) / nz as f32 - 0.5,
-                ) * size;
+                );
+                // Cone volume check: radius shrinks linearly with height.
+                if is_cone {
+                    let allowed = 0.5 - normalized.y - 0.05;
+                    if Vec2::new(normalized.x, normalized.z).length() > allowed.max(0.0) {
+                        continue;
+                    }
+                }
+                counter.next_seq += 1;
+                let jitter = 0.72 + ((counter.next_seq * 37 % 23) as f32 / 23.0) * 0.22;
+                let local = normalized * size;
                 let offset = transform.rotation * local;
                 let spray = offset.normalize_or_zero() * 1.5;
                 commands.spawn((
@@ -430,6 +459,7 @@ fn apply_damage(
     tally: &mut DestructionTally,
     spatial: &SpatialQuery,
     blocks: &Query<(&Transform, &RigidBody), With<MasonryBlock>>,
+    cones: &Query<(), With<ConeShape>>,
     damageable: &mut Query<(&mut MasonryBlock, Option<&LinearVelocity>)>,
     entity: Entity,
     energy: f32,
@@ -451,7 +481,8 @@ fn apply_damage(
             let v = velocity.map(|v| Vec3::new(v.x, v.y, v.z)).unwrap_or(Vec3::ZERO);
             let transform = *transform;
             fracture(
-                commands, assets, counter, queue, tally, spatial, blocks, entity, &transform, v,
+                commands, assets, counter, queue, tally, spatial, blocks, cones, entity,
+                &transform, v,
             );
         }
         return true;
@@ -481,8 +512,10 @@ fn projectile_impacts(
     mut queue: ResMut<SupportQueue>,
     mut counter: ResMut<FragmentCounter>,
     mut tally: ResMut<DestructionTally>,
+    mut shake: ResMut<ImpactShake>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
+    cones: Query<(), With<ConeShape>>,
     projectiles: Query<(&PreTickVelocity, &ComputedMass), With<Projectile>>,
     blocks: Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     mut damageable: Query<(&mut MasonryBlock, Option<&LinearVelocity>)>,
@@ -525,7 +558,7 @@ fn projectile_impacts(
         if blocks.contains(struck)
             && apply_damage(
                 &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial, &blocks,
-                &mut damageable, struck, energy * 0.55,
+                &cones, &mut damageable, struck, energy * 0.55,
             )
         {
             direct_shattered += 1;
@@ -558,11 +591,14 @@ fn projectile_impacts(
             let share = energy * 0.30 * weight / total_weight;
             if apply_damage(
                 &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial, &blocks,
-                &mut damageable, *target, share,
+                &cones, &mut damageable, *target, share,
             ) {
                 shattered += 1;
             }
         }
+        // Stone-on-stone weight: screen shake and a burst of dust.
+        shake.0 = (shake.0 + (energy / 3.0e6).clamp(0.15, 1.0)).min(1.2);
+        spawn_dust(&mut commands, &assets, impact_at, energy);
         info!(
             "impact at {impact_at:.1}: {speed:.0} m/s, {energy:.0} J over {} blocks (r={radius:.1}), {shattered} shattered",
             hits.len()
@@ -586,6 +622,7 @@ fn crush_damage(
     mut tally: ResMut<DestructionTally>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
+    cones: Query<(), With<ConeShape>>,
     projectiles: Query<(), With<Projectile>>,
     movers: Query<(&PreTickVelocity, &ComputedMass)>,
     blocks: Query<(&Transform, &RigidBody), With<MasonryBlock>>,
@@ -632,10 +669,54 @@ fn crush_damage(
             if damageable.contains(target) {
                 apply_damage(
                     &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial,
-                    &blocks, &mut damageable, target, energy * 0.5,
+                    &blocks, &cones, &mut damageable, target, energy * 0.5,
                 );
             }
         }
+    }
+}
+
+/// A burst of unphysical dust motes at an impact point (count scales with
+/// energy; they fly out, fall, shrink, and despawn).
+fn spawn_dust(commands: &mut Commands, assets: &MasonryAssets, at: Vec3, energy: f32) {
+    let count = ((energy / 80_000.0) as usize).clamp(8, 36);
+    for k in 0..count {
+        let h = |n: u64| {
+            let mut v = (k as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ n.wrapping_mul(0xBF58476D1CE4E5B9);
+            v ^= v >> 31;
+            (v % 1000) as f32 / 1000.0
+        };
+        let dir = Vec3::new(h(1) - 0.5, h(2) * 0.7 + 0.15, h(3) - 0.5).normalize_or_zero();
+        commands.spawn((
+            DustMote {
+                velocity: dir * (4.0 + h(4) * 7.0),
+                life: 1.2 + h(5) * 0.6,
+            },
+            Mesh3d(assets.cube.clone()),
+            MeshMaterial3d(assets.tints[k % assets.tints.len()].clone()),
+            Transform::from_translation(at + dir * 0.8)
+                .with_scale(Vec3::splat(0.25 + h(6) * 0.4)),
+        ));
+    }
+}
+
+fn dust_motes(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut motes: Query<(Entity, &mut DustMote, &mut Transform)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut mote, mut transform) in &mut motes {
+        mote.life -= dt;
+        if mote.life <= 0.0 {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        mote.velocity.y -= 6.0 * dt;
+        mote.velocity *= 1.0 - 1.6 * dt;
+        let velocity = mote.velocity;
+        transform.translation += velocity * dt;
+        transform.scale *= 1.0 - 0.8 * dt;
     }
 }
 

@@ -1,13 +1,15 @@
-//! A mannable siege catapult.
+//! A mannable counterweight trebuchet.
 //!
-//! Walk up (E to man it), aim by looking — the catapult slews to follow
+//! Walk up (E to man it), aim by looking — the machine slews to follow
 //! your view and a trajectory arc shows where the stone will land,
-//! updating as you wind. Hold left click to wind, release to loose; the
-//! camera follows the shot downrange until you click again to wind the
-//! next one. The arm swing is kinematic with substepped integration
-//! (frame-rate-independent release speed); the stone is a fully dynamic
-//! ~1.8-tonne granite sphere with continuous collision detection. The
-//! masonry system (`masonry.rs`) decides what shatters when it lands.
+//! updating as you crank. Hold left click to wind, release to loose; the
+//! camera follows the shot downrange until you click again. The beam
+//! swing is kinematic with substepped integration (frame-rate-independent
+//! release speed), paced like a gravity-driven counterweight machine —
+//! slow, ponderous, enormous. The counterweight box hangs plumb from the
+//! short arm throughout the swing. The stone is a fully dynamic
+//! ~4.6-tonne granite sphere with continuous collision detection; heavy
+//! impacts feed camera shake and dust (`masonry.rs`).
 
 use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
@@ -18,15 +20,15 @@ use super::terrain::{CASTLE_CENTER, KNOLL_CENTER, terrain_height};
 use super::world::Respawnable;
 use engine::prelude::*;
 
-pub struct CatapultPlugin;
+pub struct TrebuchetPlugin;
 
-impl Plugin for CatapultPlugin {
+impl Plugin for TrebuchetPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Manning>()
             .init_resource::<ShotCamera>()
-            .add_systems(Startup, (setup_assets, spawn_catapult).chain());
+            .add_systems(Startup, (setup_assets, spawn_trebuchet).chain());
 
-        // Headless verification: `FL_AUTO_MAN=<frame>` mans the catapult so
+        // Headless verification: `FL_AUTO_MAN=<frame>` mans the trebuchet so
         // screenshots show the aiming view, trajectory arc, and chase camera.
         if let Some(at_frame) = std::env::var("FL_AUTO_MAN")
             .ok()
@@ -36,12 +38,12 @@ impl Plugin for CatapultPlugin {
                 Update,
                 move |mut frame: Local<u32>,
                       mut manning: ResMut<Manning>,
-                      catapults: Query<Entity, With<Catapult>>| {
+                      trebuchets: Query<Entity, With<Trebuchet>>| {
                     *frame += 1;
                     if *frame == at_frame
-                        && let Some(catapult) = catapults.iter().next()
+                        && let Some(trebuchet) = trebuchets.iter().next()
                     {
-                        manning.0 = Some(catapult);
+                        manning.0 = Some(trebuchet);
                     }
                 },
             );
@@ -54,14 +56,14 @@ impl Plugin for CatapultPlugin {
             if let Ok(at_frame) = frame_str.parse::<u32>() {
                 app.add_systems(
                     Update,
-                    move |mut frame: Local<u32>, mut catapults: Query<&mut Catapult>| {
+                    move |mut frame: Local<u32>, mut trebuchets: Query<&mut Trebuchet>| {
                         *frame += 1;
                         // Fire twice: the second shot proves the reload.
                         if *frame == at_frame || *frame == at_frame + 45 {
-                            for mut catapult in &mut catapults {
-                                catapult.phase = Phase::Swinging { released: false };
-                                catapult.charge = charge;
-                                catapult.angular_velocity = 0.0;
+                            for mut trebuchet in &mut trebuchets {
+                                trebuchet.phase = Phase::Swinging { released: false };
+                                trebuchet.charge = charge;
+                                trebuchet.angular_velocity = 0.0;
                             }
                         }
                     },
@@ -76,7 +78,7 @@ impl Plugin for CatapultPlugin {
                 wind_and_loose,
                 seat_stone,
                 trajectory_preview,
-                catapult_camera,
+                trebuchet_camera,
                 hint_text,
             )
                 .chain()
@@ -85,7 +87,7 @@ impl Plugin for CatapultPlugin {
     }
 }
 
-/// Which catapult the player is manning, if any. Checked by the throw
+/// Which trebuchet the player is manning, if any. Checked by the throw
 /// system so left click doesn't also hurl cubes.
 #[derive(Resource, Default)]
 pub struct Manning(pub Option<Entity>);
@@ -103,7 +105,7 @@ struct ShotCamera {
 
 /// Root entity (kinematic body; carries the frame colliders).
 #[derive(Component)]
-struct Catapult {
+struct Trebuchet {
     phase: Phase,
     charge: f32,
     /// Current arm angle in radians (see [`ARM_COCKED`]).
@@ -124,46 +126,54 @@ enum Phase {
     Resetting,
 }
 
-/// The rotating arm (child of the root, pivot at the axle).
+/// The rotating beam (child of the root, pivot at the axle).
 #[derive(Component)]
-struct CatapultArm;
+struct TrebuchetArm;
+
+/// The counterweight hanger (child of the arm): counter-rotated every
+/// frame so the weight box hangs plumb while the beam swings.
+#[derive(Component)]
+struct CounterweightHanger;
 
 /// The loaded stone (kinematic while seated in the spoon).
 #[derive(Component)]
 struct SeatedStone {
-    catapult: Entity,
+    trebuchet: Entity,
 }
 
 /// Arm angles, radians, rotation about the arm's local X axis. The spoon
-/// arm extends +Z (the catapult's rear); negative rotation swings it up
+/// arm extends +Z (the trebuchet's rear); negative rotation swings it up
 /// and over toward the front (-Z, where the castle is).
-const ARM_COCKED: f32 = 0.17;
-const ARM_RELEASE: f32 = -0.87; // launch elevation ~40 degrees
-const ARM_STOP: f32 = -1.31; // padded stop
+const ARM_COCKED: f32 = 0.55; // long arm low at the rear, weight raised
+const ARM_RELEASE: f32 = -0.80; // sling whips the stone out ~42 degrees up
+const ARM_STOP: f32 = -1.45;
 /// Extra wind-back at full charge.
-const WIND_BACK: f32 = 0.12;
-/// Arm pivot in the catapult's local space (top of the uprights).
-const PIVOT: Vec3 = Vec3::new(0.0, 4.6, 0.3);
-/// Spoon distance from the pivot.
-const TIP_RADIUS: f32 = 6.3;
-/// Stone seat offset above the spoon.
-const SEAT: Vec3 = Vec3::new(0.0, 0.5, TIP_RADIUS - 0.15);
-const STONE_RADIUS: f32 = 0.65;
+const WIND_BACK: f32 = 0.18;
+/// Beam pivot in the trebuchet's local space (top of the A-frames).
+const PIVOT: Vec3 = Vec3::new(0.0, 7.2, 0.4);
+/// Long-arm length to the sling attachment.
+const ARM_LENGTH: f32 = 9.0;
+/// Stone seat: arm tip plus the (rigidly modeled) sling extension.
+const SEAT: Vec3 = Vec3::new(0.0, 0.55, ARM_LENGTH + 2.8);
+/// Short arm to the counterweight hanger.
+const SHORT_ARM: f32 = 2.8;
+const STONE_RADIUS: f32 = 0.75;
 /// Granite.
 const STONE_DENSITY: f32 = 2600.0;
-/// Spring angular acceleration (rad/s^2) by charge: ~43–81 m/s at the tip,
-/// i.e. from "foot of the curtain wall" to "far over the castle".
+/// Effective angular acceleration (rad/s^2) by charge. Deliberately low:
+/// a counterweight machine accelerates ponderously (~0.5 s swing), the
+/// speed comes from the enormous 11.8 m effective arm. ~45–72 m/s.
 fn spring_acceleration(charge: f32) -> f32 {
-    6.0 + 64.0 * charge
+    2.0 + 9.0 * charge
 }
-/// Seconds of held click for full charge.
-const WIND_TIME: f32 = 2.2;
+/// Seconds of held click for full charge (cranking the weight up).
+const WIND_TIME: f32 = 3.0;
 
-/// The catapult stands on the siege knoll, overlooking the castle.
+/// The trebuchet stands on the siege knoll, overlooking the castle.
 const POSITION: Vec2 = KNOLL_CENTER;
 
 #[derive(Resource)]
-struct CatapultAssets {
+struct TrebuchetAssets {
     wood: Handle<StandardMaterial>,
     dark_wood: Handle<StandardMaterial>,
     iron: Handle<StandardMaterial>,
@@ -178,7 +188,7 @@ fn setup_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.insert_resource(CatapultAssets {
+    commands.insert_resource(TrebuchetAssets {
         wood: materials.add(StandardMaterial {
             base_color: Color::srgb(0.42, 0.30, 0.17),
             perceptual_roughness: 0.85,
@@ -206,14 +216,14 @@ fn setup_assets(
     });
 }
 
-fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
+fn spawn_trebuchet(mut commands: Commands, assets: Res<TrebuchetAssets>) {
     let y = terrain_height(POSITION.x, POSITION.y);
     let to_castle = Vec2::new(0.0, -166.0) - POSITION;
     let yaw = (-to_castle.x).atan2(-to_castle.y);
 
     let root = commands
         .spawn((
-            Catapult {
+            Trebuchet {
                 phase: Phase::Ready,
                 charge: 0.0,
                 angle: ARM_COCKED,
@@ -228,55 +238,57 @@ fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
 
     let arm = commands
         .spawn((
-            CatapultArm,
+            TrebuchetArm,
             ChildOf(root),
             Transform::from_translation(PIVOT).with_rotation(Quat::from_rotation_x(ARM_COCKED)),
             Visibility::default(),
         ))
         .id();
 
-    // Frame (colliders so the player can bump into it).
-    let parts: &[(Vec3, Vec3, bool, &Handle<StandardMaterial>)] = &[
-        // platform
-        (Vec3::new(0.0, 0.85, 0.0), Vec3::new(4.6, 0.7, 7.6), true, &assets.wood),
-        // uprights
-        (Vec3::new(-1.6, 2.9, 0.3), Vec3::new(0.5, 4.0, 0.7), true, &assets.dark_wood),
-        (Vec3::new(1.6, 2.9, 0.3), Vec3::new(0.5, 4.0, 0.7), true, &assets.dark_wood),
-        // diagonal-ish braces (simple posts front and back)
-        (Vec3::new(-1.6, 1.9, 2.4), Vec3::new(0.4, 2.4, 0.4), false, &assets.dark_wood),
-        (Vec3::new(1.6, 1.9, 2.4), Vec3::new(0.4, 2.4, 0.4), false, &assets.dark_wood),
-        // axle
-        (PIVOT, Vec3::new(3.6, 0.3, 0.3), false, &assets.iron),
-        // padded stop bar at the front
-        (Vec3::new(0.0, 3.6, -2.0), Vec3::new(3.4, 0.45, 0.45), false, &assets.dark_wood),
+    // Frame: long deck, two A-frame trusses, axle, crossbraces.
+    let parts: &[(Vec3, Vec3, Quat, bool, &Handle<StandardMaterial>)] = &[
+        // deck
+        (Vec3::new(0.0, 0.9, 0.5), Vec3::new(6.0, 0.8, 11.0), Quat::IDENTITY, true, &assets.wood),
+        // A-frame legs (two slanted pairs)
+        (Vec3::new(-2.3, 4.05, -1.9), Vec3::new(0.55, 7.4, 0.7), Quat::from_rotation_x(-0.33), true, &assets.dark_wood),
+        (Vec3::new(2.3, 4.05, -1.9), Vec3::new(0.55, 7.4, 0.7), Quat::from_rotation_x(-0.33), true, &assets.dark_wood),
+        (Vec3::new(-2.3, 4.05, 2.8), Vec3::new(0.55, 7.4, 0.7), Quat::from_rotation_x(0.33), true, &assets.dark_wood),
+        (Vec3::new(2.3, 4.05, 2.8), Vec3::new(0.55, 7.4, 0.7), Quat::from_rotation_x(0.33), true, &assets.dark_wood),
+        // crossbraces between the trusses
+        (Vec3::new(0.0, 5.4, -2.4), Vec3::new(4.6, 0.4, 0.4), Quat::IDENTITY, false, &assets.dark_wood),
+        (Vec3::new(0.0, 5.4, 3.3), Vec3::new(4.6, 0.4, 0.4), Quat::IDENTITY, false, &assets.dark_wood),
+        // axle through the apex
+        (PIVOT, Vec3::new(5.2, 0.4, 0.4), Quat::IDENTITY, false, &assets.iron),
     ];
-    for (pos, size, collide, material) in parts {
+    for (pos, size, rot, collide, material) in parts {
         let mut part = commands.spawn((
             Mesh3d(assets.cube.clone()),
             MeshMaterial3d((*material).clone()),
-            Transform::from_translation(*pos).with_scale(*size),
+            Transform::from_translation(*pos).with_rotation(*rot).with_scale(*size),
             ChildOf(root),
         ));
         if *collide {
             part.insert(Collider::cuboid(1.0, 1.0, 1.0));
         }
     }
-    // Wheels (decor).
+    // Wheels.
     for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         commands.spawn((
             Mesh3d(assets.wheel.clone()),
             MeshMaterial3d(assets.dark_wood.clone()),
-            Transform::from_xyz(sx * 2.5, 0.85, sz * 2.8)
+            Transform::from_xyz(sx * 3.2, 0.9, sz * 4.2)
                 .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
             ChildOf(root),
         ));
     }
 
-    // Arm: beam, counterweight, spoon.
+    // Beam: tapered main spar, sling extension, pouch.
     for (pos, size, material) in [
-        (Vec3::new(0.0, 0.0, 1.9), Vec3::new(0.45, 0.38, 9.0), &assets.wood),
-        (Vec3::new(0.0, -0.35, -2.4), Vec3::new(1.5, 1.5, 1.5), &assets.iron),
-        (Vec3::new(0.0, 0.24, TIP_RADIUS - 0.15), Vec3::new(1.1, 0.26, 1.2), &assets.dark_wood),
+        (Vec3::new(0.0, 0.0, (ARM_LENGTH - SHORT_ARM) / 2.0), Vec3::new(0.6, 0.55, ARM_LENGTH + SHORT_ARM), &assets.wood),
+        // sling (rendered rigid)
+        (Vec3::new(0.0, 0.3, ARM_LENGTH + 1.4), Vec3::new(0.12, 0.12, 2.9), &assets.dark_wood),
+        // pouch under the seat
+        (Vec3::new(0.0, 0.25, ARM_LENGTH + 2.8), Vec3::new(1.3, 0.3, 1.4), &assets.dark_wood),
     ] {
         commands.spawn((
             Mesh3d(assets.cube.clone()),
@@ -285,14 +297,36 @@ fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
             ChildOf(arm),
         ));
     }
+    // Counterweight: hanger pivot at the short-arm end; the box swings
+    // plumb beneath it.
+    let hanger = commands
+        .spawn((
+            CounterweightHanger,
+            ChildOf(arm),
+            Transform::from_xyz(0.0, 0.0, -SHORT_ARM)
+                .with_rotation(Quat::from_rotation_x(-ARM_COCKED)),
+            Visibility::default(),
+        ))
+        .id();
+    for (pos, size, material) in [
+        (Vec3::new(0.0, -1.3, 0.0), Vec3::new(0.35, 2.2, 0.35), &assets.iron),
+        (Vec3::new(0.0, -3.5, 0.0), Vec3::new(3.0, 2.6, 3.0), &assets.iron),
+    ] {
+        commands.spawn((
+            Mesh3d(assets.cube.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(pos).with_scale(size),
+            ChildOf(hanger),
+        ));
+    }
 
     load_stone(&mut commands, &assets, root);
 }
 
 /// Spawns a fresh stone seated in the spoon.
-fn load_stone(commands: &mut Commands, assets: &CatapultAssets, catapult: Entity) {
+fn load_stone(commands: &mut Commands, assets: &TrebuchetAssets, trebuchet: Entity) {
     commands.spawn((
-        SeatedStone { catapult },
+        SeatedStone { trebuchet },
         Mesh3d(assets.stone_mesh.clone()),
         MeshMaterial3d(assets.stone_material.clone()),
         Transform::from_xyz(0.0, -1000.0, 0.0), // placed by `seat_stone`
@@ -303,14 +337,14 @@ fn load_stone(commands: &mut Commands, assets: &CatapultAssets, catapult: Entity
 
 /// Keeps the seated stone in the spoon (world-space, follows arm swing).
 fn seat_stone(
-    catapults: Query<(&Transform, &Catapult), Without<SeatedStone>>,
+    trebuchets: Query<(&Transform, &Trebuchet), Without<SeatedStone>>,
     mut stones: Query<(&SeatedStone, &mut Transform)>,
 ) {
     for (seat, mut transform) in &mut stones {
-        let Ok((root, catapult)) = catapults.get(seat.catapult) else {
+        let Ok((root, trebuchet)) = trebuchets.get(seat.trebuchet) else {
             continue;
         };
-        let arm_rot = Quat::from_rotation_x(catapult.angle);
+        let arm_rot = Quat::from_rotation_x(trebuchet.angle);
         let local = PIVOT + arm_rot * SEAT;
         transform.translation = root.translation + root.rotation * local;
         transform.rotation = root.rotation;
@@ -324,14 +358,14 @@ fn man_toggle(
     mut manning: ResMut<Manning>,
     mut shot_camera: ResMut<ShotCamera>,
     players: Query<&Transform, With<Player>>,
-    catapults: Query<(Entity, &Transform), With<Catapult>>,
+    trebuchets: Query<(Entity, &Transform), With<Trebuchet>>,
 ) {
     let Ok(player) = players.single() else {
         return;
     };
     if !keys.just_pressed(KeyCode::KeyE) {
         if let Some(active) = manning.0
-            && let Ok((_, root)) = catapults.get(active)
+            && let Ok((_, root)) = trebuchets.get(active)
             && root.translation.distance(player.translation) > MAN_RANGE + 2.0
         {
             manning.0 = None;
@@ -344,7 +378,7 @@ fn man_toggle(
         shot_camera.following = None;
         return;
     }
-    for (entity, root) in &catapults {
+    for (entity, root) in &trebuchets {
         if root.translation.distance(player.translation) <= MAN_RANGE {
             manning.0 = Some(entity);
             return;
@@ -352,17 +386,17 @@ fn man_toggle(
     }
 }
 
-/// While manned, the catapult slews to follow the player's view yaw.
+/// While manned, the trebuchet slews to follow the player's view yaw.
 fn aim(
     time: Res<Time>,
     manning: Res<Manning>,
-    players: Query<&Transform, (With<Player>, Without<Catapult>)>,
-    mut catapults: Query<&mut Transform, With<Catapult>>,
+    players: Query<&Transform, (With<Player>, Without<Trebuchet>)>,
+    mut trebuchets: Query<&mut Transform, With<Trebuchet>>,
 ) {
     let (Some(active), Ok(player)) = (manning.0, players.single()) else {
         return;
     };
-    let Ok(mut root) = catapults.get_mut(active) else {
+    let Ok(mut root) = trebuchets.get_mut(active) else {
         return;
     };
     let (player_yaw, ..) = player.rotation.to_euler(EulerRot::YXZ);
@@ -398,13 +432,14 @@ fn wind_and_loose(
     buttons: Res<ButtonInput<MouseButton>>,
     manning: Res<Manning>,
     mut shot_camera: ResMut<ShotCamera>,
-    assets: Res<CatapultAssets>,
-    mut catapults: Query<(Entity, &Transform, &mut Catapult)>,
-    mut arms: Query<(&ChildOf, &mut Transform), (With<CatapultArm>, Without<Catapult>)>,
-    stones: Query<(Entity, &SeatedStone), Without<Catapult>>,
+    assets: Res<TrebuchetAssets>,
+    mut trebuchets: Query<(Entity, &Transform, &mut Trebuchet)>,
+    mut arms: Query<(&ChildOf, &mut Transform), (With<TrebuchetArm>, Without<Trebuchet>, Without<CounterweightHanger>)>,
+    mut hangers: Query<(&ChildOf, &mut Transform), (With<CounterweightHanger>, Without<Trebuchet>, Without<TrebuchetArm>)>,
+    stones: Query<(Entity, &SeatedStone), Without<Trebuchet>>,
 ) {
     let dt = time.delta_secs();
-    for (entity, root, mut catapult) in &mut catapults {
+    for (entity, root, mut trebuchet) in &mut trebuchets {
         let manned = manning.0 == Some(entity);
         // A click while watching the previous shot returns to aiming
         // (right-click works too and never starts a wind).
@@ -418,41 +453,41 @@ fn wind_and_loose(
             shot_camera.rest_timer = 0.0;
         }
 
-        match catapult.phase {
+        match trebuchet.phase {
             Phase::Ready => {
                 if manned && !watching && buttons.pressed(MouseButton::Left) {
-                    catapult.phase = Phase::Winding;
-                    catapult.charge = 0.25;
+                    trebuchet.phase = Phase::Winding;
+                    trebuchet.charge = 0.25;
                 }
             }
             Phase::Winding => {
-                catapult.charge = (catapult.charge + dt / WIND_TIME).min(1.0);
-                catapult.angle = ARM_COCKED + catapult.charge * WIND_BACK;
+                trebuchet.charge = (trebuchet.charge + dt / WIND_TIME).min(1.0);
+                trebuchet.angle = ARM_COCKED + trebuchet.charge * WIND_BACK;
                 if !manned || !buttons.pressed(MouseButton::Left) {
-                    catapult.phase = Phase::Swinging { released: false };
-                    catapult.angular_velocity = 0.0;
+                    trebuchet.phase = Phase::Swinging { released: false };
+                    trebuchet.angular_velocity = 0.0;
                 }
             }
             Phase::Swinging { mut released } => {
                 // Substepped so release speed is frame-rate independent.
-                let acceleration = spring_acceleration(catapult.charge);
+                let acceleration = spring_acceleration(trebuchet.charge);
                 let substeps = (dt / 0.004).ceil().max(1.0) as u32;
                 let sub_dt = dt / substeps as f32;
                 for _ in 0..substeps {
-                    if catapult.angle <= ARM_STOP {
+                    if trebuchet.angle <= ARM_STOP {
                         break;
                     }
-                    catapult.angular_velocity -= acceleration * sub_dt;
-                    let previous = catapult.angle;
-                    catapult.angle += catapult.angular_velocity * sub_dt;
+                    trebuchet.angular_velocity -= acceleration * sub_dt;
+                    let previous = trebuchet.angle;
+                    trebuchet.angle += trebuchet.angular_velocity * sub_dt;
 
-                    if !released && previous > ARM_RELEASE && catapult.angle <= ARM_RELEASE {
+                    if !released && previous > ARM_RELEASE && trebuchet.angle <= ARM_RELEASE {
                         released = true;
                         // Snap the stone to the exact release pose so the
                         // flight matches the previewed arc at any frame rate.
-                        let (position, velocity) = release_state(root, catapult.charge);
+                        let (position, velocity) = release_state(root, trebuchet.charge);
                         for (stone_entity, seat) in &stones {
-                            if seat.catapult != entity {
+                            if seat.trebuchet != entity {
                                 continue;
                             }
                             commands.entity(stone_entity).remove::<SeatedStone>().insert((
@@ -477,24 +512,24 @@ fn wind_and_loose(
                                 shot_camera.held_eye = None;
                                 shot_camera.rest_timer = 0.0;
                             }
-                            info!("catapult: loosed stone at {:.1} m/s", velocity.length());
+                            info!("trebuchet: loosed stone at {:.1} m/s", velocity.length());
                         }
                     }
                 }
-                if catapult.angle <= ARM_STOP {
-                    catapult.angle = ARM_STOP;
-                    catapult.phase = Phase::Resetting;
+                if trebuchet.angle <= ARM_STOP {
+                    trebuchet.angle = ARM_STOP;
+                    trebuchet.phase = Phase::Resetting;
                 } else {
-                    catapult.phase = Phase::Swinging { released };
+                    trebuchet.phase = Phase::Swinging { released };
                 }
             }
             Phase::Resetting => {
-                // Fast reset: ready to wind again in about half a second.
-                catapult.angle += 3.2 * dt;
-                if catapult.angle >= ARM_COCKED {
-                    catapult.angle = ARM_COCKED;
-                    catapult.charge = 0.0;
-                    catapult.phase = Phase::Ready;
+                // Heavy recrank: about 1.8 s to haul the weight back up.
+                trebuchet.angle += 1.15 * dt;
+                if trebuchet.angle >= ARM_COCKED {
+                    trebuchet.angle = ARM_COCKED;
+                    trebuchet.charge = 0.0;
+                    trebuchet.phase = Phase::Ready;
                     load_stone(&mut commands, &assets, entity);
                 }
             }
@@ -502,7 +537,12 @@ fn wind_and_loose(
 
         for (parent, mut arm_transform) in &mut arms {
             if parent.parent() == entity {
-                arm_transform.rotation = Quat::from_rotation_x(catapult.angle);
+                arm_transform.rotation = Quat::from_rotation_x(trebuchet.angle);
+            }
+        }
+        for (parent, mut hanger_transform) in &mut hangers {
+            if arms.get(parent.parent()).is_ok_and(|(p, _)| p.parent() == entity) {
+                hanger_transform.rotation = Quat::from_rotation_x(-trebuchet.angle);
             }
         }
     }
@@ -514,7 +554,7 @@ fn trajectory_preview(
     mut gizmos: Gizmos,
     manning: Res<Manning>,
     shot_camera: Res<ShotCamera>,
-    catapults: Query<(&Transform, &Catapult)>,
+    trebuchets: Query<(&Transform, &Trebuchet)>,
 ) {
     let Some(active) = manning.0 else {
         return;
@@ -522,11 +562,11 @@ fn trajectory_preview(
     if shot_camera.following.is_some() {
         return;
     }
-    let Ok((root, catapult)) = catapults.get(active) else {
+    let Ok((root, trebuchet)) = trebuchets.get(active) else {
         return;
     };
-    let charge = match catapult.phase {
-        Phase::Winding => catapult.charge,
+    let charge = match trebuchet.phase {
+        Phase::Winding => trebuchet.charge,
         _ => 0.25,
     };
     let (mut position, mut velocity) = release_state(root, charge);
@@ -547,15 +587,16 @@ fn trajectory_preview(
     }
 }
 
-/// While manning: an elevated chase view behind the catapult; after firing
+/// While manning: an elevated chase view behind the trebuchet; after firing
 /// the camera follows the stone downrange until the player clicks.
-fn catapult_camera(
+fn trebuchet_camera(
     manning: Res<Manning>,
     mut shot_camera: ResMut<ShotCamera>,
+    mut shake: ResMut<super::masonry::ImpactShake>,
     time: Res<Time>,
-    catapults: Query<&Transform, (With<Catapult>, Without<MainCamera>)>,
-    players: Query<&Transform, (With<Player>, Without<Catapult>, Without<MainCamera>)>,
-    stones: Query<(&Transform, Option<&LinearVelocity>), (With<Projectile>, Without<Player>, Without<Catapult>, Without<MainCamera>)>,
+    trebuchets: Query<&Transform, (With<Trebuchet>, Without<MainCamera>)>,
+    players: Query<&Transform, (With<Player>, Without<Trebuchet>, Without<MainCamera>)>,
+    stones: Query<(&Transform, Option<&LinearVelocity>), (With<Projectile>, Without<Player>, Without<Trebuchet>, Without<MainCamera>)>,
     mut cameras: Query<&mut Transform, With<MainCamera>>,
     mut was_overriding: Local<bool>,
 ) {
@@ -609,11 +650,11 @@ fn catapult_camera(
                     None
                 }
             }
-        } else if let Ok(root) = catapults.get(active) {
+        } else if let Ok(root) = trebuchets.get(active) {
             // Behind, above, and a step to the side so the trajectory arc
             // reads as a curve instead of an edge-on line.
-            let eye = root.translation + root.rotation * Vec3::new(3.5, 7.5, 13.5);
-            let target = root.translation + root.rotation * Vec3::new(0.0, 3.0, -30.0);
+            let eye = root.translation + root.rotation * Vec3::new(4.5, 10.0, 17.0);
+            let target = root.translation + root.rotation * Vec3::new(0.0, 4.0, -30.0);
             Some((eye, target))
         } else {
             None
@@ -622,11 +663,23 @@ fn catapult_camera(
         None
     };
 
+    // Impact trauma decays; while overriding, it joggles the camera —
+    // stone-on-stone should be felt.
+    shake.0 = (shake.0 - time.delta_secs() * 0.9).max(0.0);
+    let t = time.elapsed_secs();
+    let joggle = Vec3::new(
+        (t * 47.0).sin(),
+        (t * 53.0 + 1.7).sin(),
+        (t * 41.0 + 3.1).sin(),
+    ) * shake.0
+        * shake.0
+        * 0.5;
+
     match desired {
         Some((eye, target)) => {
             // Convert the desired world pose into the camera's local frame
             // (it is a child of the player).
-            let world = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+            let world = Transform::from_translation(eye + joggle).looking_at(target, Vec3::Y);
             let inv = player.rotation.inverse();
             let goal_translation = inv * (world.translation - player.translation);
             let goal_rotation = inv * world.rotation;
@@ -649,13 +702,13 @@ fn catapult_camera(
 #[derive(Component)]
 struct HintText;
 
-/// Bottom-center prompt when near or manning the catapult.
+/// Bottom-center prompt when near or manning the trebuchet.
 fn hint_text(
     mut commands: Commands,
     manning: Res<Manning>,
     shot_camera: Res<ShotCamera>,
     players: Query<&Transform, With<Player>>,
-    catapults: Query<&Transform, With<Catapult>>,
+    trebuchets: Query<&Transform, With<Trebuchet>>,
     mut hints: Query<(Entity, &mut Text), With<HintText>>,
 ) {
     let message = if manning.0.is_some() {
@@ -665,11 +718,11 @@ fn hint_text(
             "Aim with the mouse — hold Left Click to wind, release to loose — E to step off"
         }
     } else if players.single().is_ok_and(|player| {
-        catapults
+        trebuchets
             .iter()
             .any(|c| c.translation.distance(player.translation) <= MAN_RANGE)
     }) {
-        "E — man the catapult"
+        "E — man the trebuchet"
     } else {
         ""
     };

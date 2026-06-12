@@ -26,8 +26,8 @@ impl Plugin for TerrainPlugin {
 pub const TERRAIN_SIZE: f32 = 600.0;
 /// Castle terrace: center, flat radius, blend-out radius, floor height.
 pub const CASTLE_CENTER: Vec2 = Vec2::new(0.0, -190.0);
-const TERRACE_FLAT_RADIUS: f32 = 56.0;
-const TERRACE_BLEND_RADIUS: f32 = 100.0;
+const TERRACE_FLAT_RADIUS: f32 = 66.0;
+const TERRACE_BLEND_RADIUS: f32 = 112.0;
 pub const TERRACE_HEIGHT: f32 = 44.0;
 /// Spawn-area pad on the valley floor so the physics playground sits flat.
 pub const PLAYGROUND_CENTER: Vec2 = Vec2::new(0.0, 60.0);
@@ -120,7 +120,7 @@ fn flatten(height: f32, x: f32, z: f32, center: Vec2, flat_r: f32, blend_r: f32,
 /// deliberately linear: a smoothstep profile would concentrate the slope in
 /// the middle and exceed the character controller's climb limit. The ramp
 /// tops out at the terrace edge so it never carves under the castle.
-const RAMP_TOP_Z: f32 = -134.0;
+const RAMP_TOP_Z: f32 = -124.0;
 const RAMP_BOTTOM_Z: f32 = -38.0;
 const RAMP_FLOOR: f32 = 2.0;
 const RAMP_HALF_WIDTH: f32 = 9.0;
@@ -374,19 +374,19 @@ mod tests {
     /// terrace — a floating castle means the terrace radius regressed.
     #[test]
     fn castle_sits_on_the_terrace() {
-        // Matches castle.rs footprint: walls at +-34 x, +-27 z, corner
-        // towers r=6.5, gatehouse forward to z=+29.
+        // Matches castle.rs footprint: walls at +-42 x, +-34 z, corner
+        // towers r=6.5, barbican forward to z=+50.
         for (dx, dz) in [
-            (0.0, -27.0),
-            (0.0, 29.0),
-            (-34.0, 0.0),
-            (34.0, 0.0),
-            (-40.5, -33.5),
-            (40.5, -33.5),
-            (-40.5, 33.5),
-            (40.5, 33.5),
-            (-10.0, 30.0),
-            (10.0, 30.0),
+            (0.0, -34.0),
+            (0.0, 34.0),
+            (-42.0, 0.0),
+            (42.0, 0.0),
+            (-48.0, -40.0),
+            (48.0, -40.0),
+            (-48.0, 40.0),
+            (48.0, 40.0),
+            (-6.0, 48.0),
+            (6.0, 50.0),
         ] {
             let x = CASTLE_CENTER.x + dx;
             let z = CASTLE_CENTER.y + dz;

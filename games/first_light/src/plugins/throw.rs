@@ -5,7 +5,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use engine::prelude::*;
 
-use super::catapult::Manning;
+use super::trebuchet::Manning;
 use super::masonry::{PreTickVelocity, Projectile};
 use super::world::Respawnable;
 

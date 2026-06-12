@@ -29,7 +29,7 @@ fn main() {
             plugins::world::WorldPlugin,
             plugins::props::PropsPlugin,
             plugins::throw::ThrowPlugin,
-            plugins::catapult::CatapultPlugin,
+            plugins::trebuchet::TrebuchetPlugin,
         ))
         .run();
 }
