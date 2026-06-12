@@ -22,6 +22,7 @@ fn main() {
         .add_plugins(EnginePlugins)
         .add_plugins((
             plugins::terrain::TerrainPlugin,
+            plugins::scoring::ScoringPlugin,
             plugins::masonry::MasonryPlugin,
             plugins::castle::CastlePlugin,
             plugins::vegetation::VegetationPlugin,
