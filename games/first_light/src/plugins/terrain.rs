@@ -25,9 +25,9 @@ impl Plugin for TerrainPlugin {
 pub const TERRAIN_SIZE: f32 = 600.0;
 /// Castle terrace: center, flat radius, blend-out radius, floor height.
 pub const CASTLE_CENTER: Vec2 = Vec2::new(0.0, -190.0);
-const TERRACE_FLAT_RADIUS: f32 = 58.0;
-const TERRACE_BLEND_RADIUS: f32 = 95.0;
-pub const TERRACE_HEIGHT: f32 = 58.0;
+const TERRACE_FLAT_RADIUS: f32 = 56.0;
+const TERRACE_BLEND_RADIUS: f32 = 100.0;
+pub const TERRACE_HEIGHT: f32 = 44.0;
 /// Spawn-area pad on the valley floor so the physics playground sits flat.
 pub const PLAYGROUND_CENTER: Vec2 = Vec2::new(0.0, 60.0);
 const PLAYGROUND_FLAT_RADIUS: f32 = 22.0;
@@ -110,17 +110,23 @@ fn flatten(height: f32, x: f32, z: f32, center: Vec2, flat_r: f32, blend_r: f32,
 }
 
 /// Causeway: a broad processional ramp climbing from the valley floor to the
-/// castle gate, carved into the headwall slope at a walkable ~25 degrees.
-const RAMP_TOP_Z: f32 = -180.0;
-const RAMP_BOTTOM_Z: f32 = -70.0;
+/// terrace edge at a constant, walkable grade (~24 degrees). The profile is
+/// deliberately linear: a smoothstep profile would concentrate the slope in
+/// the middle and exceed the character controller's climb limit. The ramp
+/// tops out at the terrace edge so it never carves under the castle.
+const RAMP_TOP_Z: f32 = -134.0;
+const RAMP_BOTTOM_Z: f32 = -38.0;
+const RAMP_FLOOR: f32 = 2.0;
 const RAMP_HALF_WIDTH: f32 = 9.0;
 
 fn ramp(height: f32, x: f32, z: f32) -> f32 {
-    let along = smoothstep(RAMP_TOP_Z, RAMP_BOTTOM_Z, z);
-    let target = TERRACE_HEIGHT + (2.0 - TERRACE_HEIGHT) * along;
-    let lateral = 1.0 - smoothstep(RAMP_HALF_WIDTH, RAMP_HALF_WIDTH + 10.0, x.abs());
-    let in_z = smoothstep(RAMP_BOTTOM_Z + 15.0, RAMP_BOTTOM_Z, z)
-        * (1.0 - smoothstep(RAMP_TOP_Z, RAMP_TOP_Z - 15.0, z));
+    let along = ((z - RAMP_TOP_Z) / (RAMP_BOTTOM_Z - RAMP_TOP_Z)).clamp(0.0, 1.0);
+    let target = TERRACE_HEIGHT + (RAMP_FLOOR - TERRACE_HEIGHT) * along;
+    let lateral = 1.0 - smoothstep(RAMP_HALF_WIDTH, RAMP_HALF_WIDTH + 8.0, x.abs());
+    // Fade out at the valley end so the ramp blends into the meadow; above
+    // the top it pins to the terrace height, which the terrace flatten
+    // already guarantees, so no extra fade is needed there.
+    let in_z = smoothstep(RAMP_BOTTOM_Z + 14.0, RAMP_BOTTOM_Z, z);
     height + (target - height) * lateral * in_z
 }
 
@@ -182,11 +188,11 @@ fn ground_color(x: f32, z: f32, height: f32, normal: Vec3) -> [f32; 4] {
         * (1.0 - smoothstep(0.18, 0.4, slope));
     color = color.lerp(sand, sandiness);
 
-    // Cobbled causeway up to the castle gate.
+    // Cobbled causeway from the meadow up to the castle gate.
     let cobble = Vec3::new(0.42 + tint * 0.05, 0.40 + tint * 0.04, 0.37 + tint * 0.04);
     let on_road = (1.0 - smoothstep(6.5, 10.0, x.abs()))
-        * smoothstep(-50.0, -65.0, z)
-        * (1.0 - smoothstep(-178.0, -188.0, z));
+        * smoothstep(-24.0, -40.0, z)
+        * (1.0 - smoothstep(-160.0, -170.0, z));
     color = color.lerp(cobble, on_road);
 
     [color.x, color.y, color.z, 1.0]
@@ -271,4 +277,63 @@ fn spawn_terrain(
         })),
         Transform::from_xyz(LAKE_CENTER.x, WATER_LEVEL, LAKE_CENTER.y),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The causeway centerline must never exceed the controller's climb
+    /// limit (40 degrees, with margin).
+    #[test]
+    fn causeway_is_walkable() {
+        let max_grade = (38.0_f32).to_radians().tan();
+        let mut z = RAMP_TOP_Z;
+        while z <= RAMP_BOTTOM_Z + 20.0 {
+            let grade =
+                (terrain_height(0.0, z - 1.0) - terrain_height(0.0, z + 1.0)).abs() / 2.0;
+            assert!(
+                grade < max_grade,
+                "causeway too steep at z={z}: grade {grade:.3}"
+            );
+            z += 1.0;
+        }
+    }
+
+    /// Every castle wall line and tower footing must sit on the flat
+    /// terrace — a floating castle means the terrace radius regressed.
+    #[test]
+    fn castle_sits_on_the_terrace() {
+        // Matches castle.rs footprint: walls at +-34 x, +-27 z, corner
+        // towers r=6.5, gatehouse forward to z=+29.
+        for (dx, dz) in [
+            (0.0, -27.0),
+            (0.0, 29.0),
+            (-34.0, 0.0),
+            (34.0, 0.0),
+            (-40.5, -33.5),
+            (40.5, -33.5),
+            (-40.5, 33.5),
+            (40.5, 33.5),
+            (-10.0, 30.0),
+            (10.0, 30.0),
+        ] {
+            let x = CASTLE_CENTER.x + dx;
+            let z = CASTLE_CENTER.y + dz;
+            let h = terrain_height(x, z);
+            assert!(
+                (h - TERRACE_HEIGHT).abs() < 0.25,
+                "castle footing floats/buried at ({dx}, {dz}): h={h:.2} vs terrace {TERRACE_HEIGHT}"
+            );
+        }
+    }
+
+    /// The playground pad must stay flat for the crate pyramid.
+    #[test]
+    fn playground_is_flat() {
+        for (dx, dz) in [(0.0, 0.0), (8.0, -12.0), (-8.0, 8.0), (12.0, 0.0)] {
+            let h = terrain_height(PLAYGROUND_CENTER.x + dx, PLAYGROUND_CENTER.y + dz);
+            assert!(h.abs() < 0.2, "playground not flat at ({dx}, {dz}): {h}");
+        }
+    }
 }
