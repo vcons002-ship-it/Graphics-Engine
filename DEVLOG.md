@@ -1,5 +1,32 @@
 # DEVLOG
 
+## Entry #5 — 2026-06-12 — Catapult overhaul + feedback round
+
+Playtest feedback: catapult never reloaded (the swing substep loop broke
+at the release angle, so the arm never reached its stop and the state
+machine hung in `Swinging` — also why testing caught it only via the
+double-fire headless check). Now: release mid-swing, follow through to
+the stop, ~0.5 s reset, auto-reload.
+
+- Catapult ~1.6× bigger (pivot at 4.6 m, 6.3 m arm, 1.8 t stone), spring
+  spans ~43–81 m/s tip speed (charge 2.2 s) — wall-base to far-overshoot.
+- **Trajectory preview**: gizmo arc + landing marker, live while winding.
+- **Cameras**: elevated chase view behind the machine while aiming; after
+  loosing, the camera follows the stone downrange until the player clicks
+  (which also starts the next wind). Camera override = rewriting the
+  camera child's local transform from a desired world pose; restore on
+  dismount. Watch for B0001: every `&Transform` query in a system that
+  also takes `&mut Transform` on the camera needs `Without<MainCamera>`.
+- Emissives cut ~10× across props/cubes/windows/torches (they read like
+  suns at ev100 13 with bloom).
+- Trees v3: mixed forest — pines with tapered trunks and four jittered
+  canopy tiers, broadleaf oaks from clustered ico-spheres; smoother rocks.
+- Ground bake: cavity shading (curvature-based), grass-blade speckle,
+  dirt patches.
+- Verified headless: double auto-fire (reload), low-charge direct hit on
+  the gate battlements at 43 m/s / 1.68 MJ — shatter, punch-through,
+  secondary impacts, second stone loosed.
+
 ## Entry #4 — 2026-06-12 — Per-stone damage, cracking, and fracture
 
 Stones now take damage and break apart, giving destruction depth beyond

@@ -52,15 +52,17 @@ fn spawn_vegetation(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // Shared meshes; instances vary by transform scale.
-    let trunk_mesh = meshes.add(Cone {
-        radius: 0.3,
-        height: 3.2,
+    let pine_trunk = meshes.add(Cone {
+        radius: 0.28,
+        height: 3.6,
     });
+    let oak_trunk = meshes.add(Cylinder::new(0.26, 2.9));
     let canopy_mesh = meshes.add(Cone {
         radius: 1.0,
         height: 1.0,
     });
-    let rock_mesh = meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap());
+    let leaf_ball = meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap());
+    let rock_mesh = meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap());
     let bush_mesh = meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap());
 
     let trunk_material = materials.add(StandardMaterial {
@@ -68,6 +70,19 @@ fn spawn_vegetation(
         perceptual_roughness: 0.95,
         ..default()
     });
+    let oak_greens: Vec<_> = [
+        Color::srgb(0.20, 0.38, 0.10),
+        Color::srgb(0.26, 0.42, 0.13),
+        Color::srgb(0.16, 0.34, 0.09),
+    ]
+    .map(|c| {
+        materials.add(StandardMaterial {
+            base_color: c,
+            perceptual_roughness: 0.9,
+            ..default()
+        })
+    })
+    .to_vec();
     let canopy_materials: Vec<_> = [
         Color::srgb(0.07, 0.26, 0.09),
         Color::srgb(0.10, 0.31, 0.11),
@@ -119,39 +134,74 @@ fn spawn_vegetation(
             hash01((i, 6)) * std::f32::consts::TAU,
             (hash01((i, 7)) - 0.5) * 0.10,
         );
-        let canopy = canopy_materials[(i % canopy_materials.len() as u64) as usize].clone();
-        commands
+        let oak = i % 3 == 1 && h < 25.0;
+        let tree_root = commands
             .spawn((
                 Transform::from_xyz(x, h, z).with_rotation(lean),
                 Visibility::default(),
                 RigidBody::Static,
                 Collider::cylinder(0.3 * s, 3.0 * s),
             ))
-            .with_children(|tree| {
+            .id();
+        if oak {
+            // Broadleaf: cylinder trunk, clustered leaf balls.
+            let green = oak_greens[(i % oak_greens.len() as u64) as usize].clone();
+            commands.entity(tree_root).with_children(|tree| {
                 tree.spawn((
-                    Mesh3d(trunk_mesh.clone()),
+                    Mesh3d(oak_trunk.clone()),
                     MeshMaterial3d(trunk_material.clone()),
-                    Transform::from_xyz(0.0, 1.6 * s, 0.0).with_scale(Vec3::splat(s)),
+                    Transform::from_xyz(0.0, 1.4 * s, 0.0).with_scale(Vec3::splat(s)),
                 ));
-                for (layer, (radius, height, y)) in
-                    [(1.6, 2.8, 2.6), (1.25, 2.4, 4.0), (0.85, 2.0, 5.2)]
-                        .into_iter()
-                        .enumerate()
+                for (k, (dx, dy, dz, r)) in [
+                    (0.0, 3.5, 0.0, 1.7),
+                    (0.95, 2.9, 0.5, 1.15),
+                    (-0.85, 3.0, -0.55, 1.1),
+                    (0.15, 2.7, -0.9, 0.95),
+                ]
+                .into_iter()
+                .enumerate()
                 {
+                    let squash = 0.82 + hash01((i, 30 + k as u64)) * 0.2;
+                    tree.spawn((
+                        Mesh3d(leaf_ball.clone()),
+                        MeshMaterial3d(green.clone()),
+                        Transform::from_xyz(dx * s, dy * s, dz * s)
+                            .with_scale(Vec3::new(r * s, r * s * squash, r * s)),
+                    ));
+                }
+            });
+        } else {
+            // Pine: tapered trunk, four offset-jittered canopy tiers.
+            let canopy = canopy_materials[(i % canopy_materials.len() as u64) as usize].clone();
+            commands.entity(tree_root).with_children(|tree| {
+                tree.spawn((
+                    Mesh3d(pine_trunk.clone()),
+                    MeshMaterial3d(trunk_material.clone()),
+                    Transform::from_xyz(0.0, 1.8 * s, 0.0).with_scale(Vec3::splat(s)),
+                ));
+                for (k, (radius, height, y)) in [
+                    (1.75, 2.7, 2.4),
+                    (1.4, 2.4, 3.7),
+                    (1.05, 2.1, 4.9),
+                    (0.68, 1.8, 6.0),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let jx = (hash01((i, 40 + k as u64)) - 0.5) * 0.3;
+                    let jz = (hash01((i, 50 + k as u64)) - 0.5) * 0.3;
                     tree.spawn((
                         Mesh3d(canopy_mesh.clone()),
                         MeshMaterial3d(canopy.clone()),
-                        Transform::from_xyz(0.0, y * s, 0.0).with_scale(Vec3::new(
+                        Transform::from_xyz(jx * s, y * s, jz * s).with_scale(Vec3::new(
                             radius * 2.0 * s,
                             height * s,
                             radius * 2.0 * s,
                         )),
-                        // Slight per-layer twist so silhouettes vary.
-                        Visibility::default(),
                     ));
-                    let _ = layer;
                 }
             });
+        }
     }
 
     // --- Boulders --------------------------------------------------------------

@@ -189,6 +189,13 @@ fn ground_color(x: f32, z: f32, height: f32, normal: Vec3) -> [f32; 4] {
         * (1.0 - smoothstep(0.18, 0.4, slope));
     color = color.lerp(sand, sandiness);
 
+    // Dirt patches breaking up the meadow.
+    let dirt = Vec3::new(0.34, 0.27, 0.17);
+    let patch = smoothstep(0.32, 0.55, fbm(x * 0.021 + 91.0, z * 0.021 + 47.0, 3))
+        * (1.0 - rockiness)
+        * (1.0 - smoothstep(0.15, 0.3, slope));
+    color = color.lerp(dirt, patch * 0.65);
+
     // Cobbled causeway from the meadow up to the castle gate.
     let cobble = Vec3::new(0.42 + tint * 0.05, 0.40 + tint * 0.04, 0.37 + tint * 0.04);
     let on_road = (1.0 - smoothstep(6.5, 10.0, x.abs()))
@@ -216,16 +223,24 @@ fn bake_albedo() -> Image {
             let x = -half + i as f32 * step;
             let h = terrain_height(x, z);
             // Cheap slope estimate at texel scale.
-            let dx = terrain_height(x + 0.7, z) - h;
-            let dz = terrain_height(x, z + 0.7) - h;
-            let normal = Vec3::new(-dx, 0.7, -dz).normalize();
+            let xp = terrain_height(x + 0.7, z);
+            let zp = terrain_height(x, z + 0.7);
+            let xm = terrain_height(x - 0.7, z);
+            let zm = terrain_height(x, z - 0.7);
+            let normal = Vec3::new(xm - xp, 1.4, zm - zp).normalize();
             let c = ground_color(x, z, h, normal);
-            // Micro-variation so flat fields aren't uniform.
-            let micro = 1.0 + fbm(x * 0.9 + 5.0, z * 0.9 - 9.0, 2) * 0.10;
+            // Baked cavity shading: hollows darken, ridges lighten.
+            let curvature = (xp + xm + zp + zm - 4.0 * h) * 0.5;
+            let shade = (1.0 - curvature * 0.35).clamp(0.78, 1.15);
+            // Micro-variation: broad tone shifts plus grass-blade speckle.
+            let micro = 1.0
+                + fbm(x * 0.9 + 5.0, z * 0.9 - 9.0, 2) * 0.10
+                + fbm(x * 3.1 - 17.0, z * 3.1 + 23.0, 2) * 0.07;
+            let m = shade * micro;
             data.extend_from_slice(&[
-                ((c[0] * micro).clamp(0.0, 1.0) * 255.0) as u8,
-                ((c[1] * micro).clamp(0.0, 1.0) * 255.0) as u8,
-                ((c[2] * micro).clamp(0.0, 1.0) * 255.0) as u8,
+                ((c[0] * m).clamp(0.0, 1.0) * 255.0) as u8,
+                ((c[1] * m).clamp(0.0, 1.0) * 255.0) as u8,
+                ((c[2] * m).clamp(0.0, 1.0) * 255.0) as u8,
                 255,
             ]);
         }

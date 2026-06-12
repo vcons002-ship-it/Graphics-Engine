@@ -1,11 +1,13 @@
-//! A mannable catapult for sieging the castle.
+//! A mannable siege catapult.
 //!
 //! Walk up (E to man it), aim by looking — the catapult slews to follow
-//! your view — hold left click to wind the arm, release to loose. The arm
-//! swing is kinematic (reliable and tunable); the stone is a fully dynamic
-//! ~1-tonne granite sphere released with the arm-tip velocity, flying with
-//! continuous collision detection so it never tunnels through walls. The
-//! masonry system (`masonry.rs`) handles what happens when it lands.
+//! your view and a trajectory arc shows where the stone will land,
+//! updating as you wind. Hold left click to wind, release to loose; the
+//! camera follows the shot downrange until you click again to wind the
+//! next one. The arm swing is kinematic with substepped integration
+//! (frame-rate-independent release speed); the stone is a fully dynamic
+//! ~1.8-tonne granite sphere with continuous collision detection. The
+//! masonry system (`masonry.rs`) decides what shatters when it lands.
 
 use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
@@ -21,10 +23,10 @@ pub struct CatapultPlugin;
 impl Plugin for CatapultPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Manning>()
+            .init_resource::<ShotCamera>()
             .add_systems(Startup, (setup_assets, spawn_catapult).chain());
 
-        // Headless verification: `FL_AUTO_FIRE=<frame>[:<charge>]` fires at
-        // the given frame with the given charge (default full).
+        // Headless verification: `FL_AUTO_FIRE=<frame>[:<charge>]`.
         if let Ok(var) = std::env::var("FL_AUTO_FIRE") {
             let (frame_str, charge_str) = var.split_once(':').unwrap_or((var.as_str(), "1.0"));
             let charge: f32 = charge_str.parse().unwrap_or(1.0);
@@ -33,9 +35,10 @@ impl Plugin for CatapultPlugin {
                     Update,
                     move |mut frame: Local<u32>, mut catapults: Query<&mut Catapult>| {
                         *frame += 1;
-                        if *frame == at_frame {
+                        // Fire twice: the second shot proves the reload.
+                        if *frame == at_frame || *frame == at_frame + 45 {
                             for mut catapult in &mut catapults {
-                                catapult.phase = Phase::Swinging;
+                                catapult.phase = Phase::Swinging { released: false };
                                 catapult.charge = charge;
                                 catapult.angular_velocity = 0.0;
                             }
@@ -44,13 +47,20 @@ impl Plugin for CatapultPlugin {
                 );
             }
         }
-        app
-            .add_systems(
-                Update,
-                (man_toggle, aim, wind_and_loose, seat_stone, hint_text)
-                    .chain()
-                    .run_if(in_state(MenuState::Closed)),
-            );
+        app.add_systems(
+            Update,
+            (
+                man_toggle,
+                aim,
+                wind_and_loose,
+                seat_stone,
+                trajectory_preview,
+                catapult_camera,
+                hint_text,
+            )
+                .chain()
+                .run_if(in_state(MenuState::Closed)),
+        );
     }
 }
 
@@ -58,6 +68,13 @@ impl Plugin for CatapultPlugin {
 /// system so left click doesn't also hurl cubes.
 #[derive(Resource, Default)]
 pub struct Manning(pub Option<Entity>);
+
+/// While a shot is in the air the camera chases it; clicking returns to
+/// aiming (and starts the next wind).
+#[derive(Resource, Default)]
+struct ShotCamera {
+    following: Option<Entity>,
+}
 
 /// Root entity (kinematic body; carries the frame colliders).
 #[derive(Component)]
@@ -70,13 +87,14 @@ struct Catapult {
     angular_velocity: f32,
 }
 
+#[derive(Clone, Copy, PartialEq)]
 enum Phase {
     /// Cocked and loaded, waiting.
     Ready,
     /// Player holding the wind (charge grows).
     Winding,
-    /// Arm swinging; stone releases at [`ARM_RELEASE`].
-    Swinging,
+    /// Arm swinging; the stone releases at [`ARM_RELEASE`].
+    Swinging { released: bool },
     /// Arm returning to cocked; reloads when done.
     Resetting,
 }
@@ -94,14 +112,27 @@ struct SeatedStone {
 /// Arm angles, radians, rotation about the arm's local X axis. The spoon
 /// arm extends +Z (the catapult's rear); negative rotation swings it up
 /// and over toward the front (-Z, where the castle is).
-const ARM_COCKED: f32 = 0.17; // ~10 deg below horizontal, spoon at the rear
-const ARM_RELEASE: f32 = -0.87; // ~50 deg past vertical start: stone flies ~50 deg up
-const ARM_STOP: f32 = -1.31; // padded stop ~75 deg
+const ARM_COCKED: f32 = 0.17;
+const ARM_RELEASE: f32 = -0.87; // launch elevation ~40 degrees
+const ARM_STOP: f32 = -1.31; // padded stop
+/// Extra wind-back at full charge.
+const WIND_BACK: f32 = 0.12;
+/// Arm pivot in the catapult's local space (top of the uprights).
+const PIVOT: Vec3 = Vec3::new(0.0, 4.6, 0.3);
 /// Spoon distance from the pivot.
-const TIP_RADIUS: f32 = 4.0;
-const STONE_RADIUS: f32 = 0.45;
+const TIP_RADIUS: f32 = 6.3;
+/// Stone seat offset above the spoon.
+const SEAT: Vec3 = Vec3::new(0.0, 0.5, TIP_RADIUS - 0.15);
+const STONE_RADIUS: f32 = 0.55;
 /// Granite.
 const STONE_DENSITY: f32 = 2600.0;
+/// Spring angular acceleration (rad/s^2) by charge: ~43–81 m/s at the tip,
+/// i.e. from "foot of the curtain wall" to "far over the castle".
+fn spring_acceleration(charge: f32) -> f32 {
+    6.0 + 64.0 * charge
+}
+/// Seconds of held click for full charge.
+const WIND_TIME: f32 = 2.2;
 
 /// Where the catapult stands (meadow edge, clear shot at the castle).
 const POSITION: Vec2 = Vec2::new(16.0, 34.0);
@@ -145,14 +176,13 @@ fn setup_assets(
             ..default()
         }),
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        wheel: meshes.add(Cylinder::new(0.55, 0.3)),
+        wheel: meshes.add(Cylinder::new(0.85, 0.45)),
         stone_mesh: meshes.add(Sphere::new(STONE_RADIUS)),
     });
 }
 
 fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
     let y = terrain_height(POSITION.x, POSITION.y);
-    // Face the castle gate.
     let to_castle = Vec2::new(0.0, -166.0) - POSITION;
     let yaw = (-to_castle.x).atan2(-to_castle.y);
 
@@ -175,8 +205,7 @@ fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
         .spawn((
             CatapultArm,
             ChildOf(root),
-            Transform::from_xyz(0.0, 3.0, 0.2)
-                .with_rotation(Quat::from_rotation_x(ARM_COCKED)),
+            Transform::from_translation(PIVOT).with_rotation(Quat::from_rotation_x(ARM_COCKED)),
             Visibility::default(),
         ))
         .id();
@@ -184,14 +213,17 @@ fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
     // Frame (colliders so the player can bump into it).
     let parts: &[(Vec3, Vec3, bool, &Handle<StandardMaterial>)] = &[
         // platform
-        (Vec3::new(0.0, 0.55, 0.0), Vec3::new(3.0, 0.5, 5.0), true, &assets.wood),
+        (Vec3::new(0.0, 0.85, 0.0), Vec3::new(4.6, 0.7, 7.6), true, &assets.wood),
         // uprights
-        (Vec3::new(-1.05, 1.9, 0.2), Vec3::new(0.35, 2.6, 0.5), true, &assets.dark_wood),
-        (Vec3::new(1.05, 1.9, 0.2), Vec3::new(0.35, 2.6, 0.5), true, &assets.dark_wood),
+        (Vec3::new(-1.6, 2.9, 0.3), Vec3::new(0.5, 4.0, 0.7), true, &assets.dark_wood),
+        (Vec3::new(1.6, 2.9, 0.3), Vec3::new(0.5, 4.0, 0.7), true, &assets.dark_wood),
+        // diagonal-ish braces (simple posts front and back)
+        (Vec3::new(-1.6, 1.9, 2.4), Vec3::new(0.4, 2.4, 0.4), false, &assets.dark_wood),
+        (Vec3::new(1.6, 1.9, 2.4), Vec3::new(0.4, 2.4, 0.4), false, &assets.dark_wood),
         // axle
-        (Vec3::new(0.0, 3.0, 0.2), Vec3::new(2.4, 0.22, 0.22), false, &assets.iron),
+        (PIVOT, Vec3::new(3.6, 0.3, 0.3), false, &assets.iron),
         // padded stop bar at the front
-        (Vec3::new(0.0, 2.4, -1.3), Vec3::new(2.2, 0.3, 0.3), false, &assets.dark_wood),
+        (Vec3::new(0.0, 3.6, -2.0), Vec3::new(3.4, 0.45, 0.45), false, &assets.dark_wood),
     ];
     for (pos, size, collide, material) in parts {
         let mut part = commands.spawn((
@@ -209,7 +241,7 @@ fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
         commands.spawn((
             Mesh3d(assets.wheel.clone()),
             MeshMaterial3d(assets.dark_wood.clone()),
-            Transform::from_xyz(sx * 1.65, 0.55, sz * 1.8)
+            Transform::from_xyz(sx * 2.5, 0.85, sz * 2.8)
                 .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
             ChildOf(root),
         ));
@@ -217,9 +249,9 @@ fn spawn_catapult(mut commands: Commands, assets: Res<CatapultAssets>) {
 
     // Arm: beam, counterweight, spoon.
     for (pos, size, material) in [
-        (Vec3::new(0.0, 0.0, 1.2), Vec3::new(0.3, 0.26, 5.8), &assets.wood),
-        (Vec3::new(0.0, -0.2, -1.7), Vec3::new(1.0, 1.0, 1.0), &assets.iron),
-        (Vec3::new(0.0, 0.16, TIP_RADIUS - 0.1), Vec3::new(0.7, 0.18, 0.8), &assets.dark_wood),
+        (Vec3::new(0.0, 0.0, 1.9), Vec3::new(0.45, 0.38, 9.0), &assets.wood),
+        (Vec3::new(0.0, -0.35, -2.4), Vec3::new(1.5, 1.5, 1.5), &assets.iron),
+        (Vec3::new(0.0, 0.24, TIP_RADIUS - 0.15), Vec3::new(1.1, 0.26, 1.2), &assets.dark_wood),
     ] {
         commands.spawn((
             Mesh3d(assets.cube.clone()),
@@ -247,29 +279,25 @@ fn load_stone(commands: &mut Commands, assets: &CatapultAssets, catapult: Entity
 /// Keeps the seated stone in the spoon (world-space, follows arm swing).
 fn seat_stone(
     catapults: Query<(&Transform, &Catapult), Without<SeatedStone>>,
-    arms: Query<&ChildOf, With<CatapultArm>>,
     mut stones: Query<(&SeatedStone, &mut Transform)>,
 ) {
-    let _ = arms;
     for (seat, mut transform) in &mut stones {
         let Ok((root, catapult)) = catapults.get(seat.catapult) else {
             continue;
         };
-        // Arm pivot is at (0, 3.0, 0.2) local; spoon at TIP_RADIUS along
-        // the arm's +Z, rotated by the current angle about local X.
-        let pivot = Vec3::new(0.0, 3.0, 0.2);
         let arm_rot = Quat::from_rotation_x(catapult.angle);
-        let local = pivot + arm_rot * Vec3::new(0.0, 0.35, TIP_RADIUS - 0.1);
+        let local = PIVOT + arm_rot * SEAT;
         transform.translation = root.translation + root.rotation * local;
         transform.rotation = root.rotation;
     }
 }
 
-const MAN_RANGE: f32 = 6.0;
+const MAN_RANGE: f32 = 7.0;
 
 fn man_toggle(
     keys: Res<ButtonInput<KeyCode>>,
     mut manning: ResMut<Manning>,
+    mut shot_camera: ResMut<ShotCamera>,
     players: Query<&Transform, With<Player>>,
     catapults: Query<(Entity, &Transform), With<Catapult>>,
 ) {
@@ -277,17 +305,18 @@ fn man_toggle(
         return;
     };
     if !keys.just_pressed(KeyCode::KeyE) {
-        // Auto-dismount when wandering off.
         if let Some(active) = manning.0
             && let Ok((_, root)) = catapults.get(active)
             && root.translation.distance(player.translation) > MAN_RANGE + 2.0
         {
             manning.0 = None;
+            shot_camera.following = None;
         }
         return;
     }
     if manning.0.is_some() {
         manning.0 = None;
+        shot_camera.following = None;
         return;
     }
     for (entity, root) in &catapults {
@@ -324,89 +353,109 @@ fn aim(
     root.rotation = Quat::from_rotation_y(current + delta.clamp(-max_step, max_step));
 }
 
+/// Release speed (m/s) the spring will deliver for a given charge.
+fn release_speed(charge: f32) -> f32 {
+    let sweep = (ARM_COCKED + charge * WIND_BACK) - ARM_RELEASE;
+    (2.0 * spring_acceleration(charge) * sweep).sqrt() * TIP_RADIUS
+}
+
+/// World-space release point and velocity for a given charge.
+fn release_state(root: &Transform, charge: f32) -> (Vec3, Vec3) {
+    let arm_rot = Quat::from_rotation_x(ARM_RELEASE);
+    let position = root.translation + root.rotation * (PIVOT + arm_rot * SEAT);
+    let speed = release_speed(charge);
+    let direction = root.rotation * Vec3::new(0.0, ARM_RELEASE.cos(), ARM_RELEASE.sin());
+    (position, direction * speed)
+}
+
 /// Wind-up, release, swing, stone hand-off, reset, reload.
 fn wind_and_loose(
     mut commands: Commands,
     time: Res<Time>,
     buttons: Res<ButtonInput<MouseButton>>,
     manning: Res<Manning>,
+    mut shot_camera: ResMut<ShotCamera>,
     assets: Res<CatapultAssets>,
     mut catapults: Query<(Entity, &Transform, &mut Catapult)>,
     mut arms: Query<(&ChildOf, &mut Transform), (With<CatapultArm>, Without<Catapult>)>,
-    stones: Query<(Entity, &SeatedStone, &Transform), (Without<Catapult>, Without<CatapultArm>)>,
+    stones: Query<(Entity, &SeatedStone), Without<Catapult>>,
 ) {
     let dt = time.delta_secs();
     for (entity, root, mut catapult) in &mut catapults {
         let manned = manning.0 == Some(entity);
+        // A click while watching the previous shot returns to aiming.
+        let watching = manned && shot_camera.following.is_some();
+        if watching && buttons.just_pressed(MouseButton::Left) {
+            shot_camera.following = None;
+        }
+
         match catapult.phase {
             Phase::Ready => {
-                if manned && buttons.pressed(MouseButton::Left) {
+                if manned && !watching && buttons.pressed(MouseButton::Left) {
                     catapult.phase = Phase::Winding;
-                    catapult.charge = 0.3;
+                    catapult.charge = 0.25;
                 }
             }
             Phase::Winding => {
-                catapult.charge = (catapult.charge + dt / 1.6).min(1.0);
-                // Creak a few degrees further back as it winds.
-                catapult.angle = ARM_COCKED + catapult.charge * 0.12;
-                if !manned || buttons.just_released(MouseButton::Left) || !buttons.pressed(MouseButton::Left) {
-                    catapult.phase = Phase::Swinging;
+                catapult.charge = (catapult.charge + dt / WIND_TIME).min(1.0);
+                catapult.angle = ARM_COCKED + catapult.charge * WIND_BACK;
+                if !manned || !buttons.pressed(MouseButton::Left) {
+                    catapult.phase = Phase::Swinging { released: false };
                     catapult.angular_velocity = 0.0;
                 }
             }
-            Phase::Swinging => {
-                // Constant torque from the spring: ~snappy 0.2 s swing.
-                // Integrated in small substeps so the release speed is
-                // frame-rate independent (one big Update step would blow
-                // far past the release angle).
-                let acceleration = 20.0 + 53.0 * catapult.charge;
+            Phase::Swinging { mut released } => {
+                // Substepped so release speed is frame-rate independent.
+                let acceleration = spring_acceleration(catapult.charge);
                 let substeps = (dt / 0.004).ceil().max(1.0) as u32;
                 let sub_dt = dt / substeps as f32;
-                let mut previous = catapult.angle;
                 for _ in 0..substeps {
-                    if catapult.angle <= ARM_RELEASE {
+                    if catapult.angle <= ARM_STOP {
                         break;
                     }
                     catapult.angular_velocity -= acceleration * sub_dt;
-                    previous = catapult.angle;
+                    let previous = catapult.angle;
                     catapult.angle += catapult.angular_velocity * sub_dt;
-                }
 
-                // Stone releases the moment the arm passes ARM_RELEASE.
-                if previous > ARM_RELEASE && catapult.angle <= ARM_RELEASE {
-                    for (stone_entity, seat, stone_transform) in &stones {
-                        if seat.catapult != entity {
-                            continue;
+                    if !released && previous > ARM_RELEASE && catapult.angle <= ARM_RELEASE {
+                        released = true;
+                        let (_, velocity) = release_state(root, catapult.charge);
+                        for (stone_entity, seat) in &stones {
+                            if seat.catapult != entity {
+                                continue;
+                            }
+                            commands.entity(stone_entity).remove::<SeatedStone>().insert((
+                                (
+                                    RigidBody::Dynamic,
+                                    Collider::sphere(STONE_RADIUS),
+                                    ColliderDensity(STONE_DENSITY),
+                                    Friction::new(0.7),
+                                    Restitution::new(0.1),
+                                    SweptCcd::default(),
+                                ),
+                                Projectile,
+                                CollisionEventsEnabled,
+                                PreTickVelocity(velocity),
+                                TransformInterpolation,
+                                LinearVelocity(velocity.adjust_precision()),
+                            ));
+                            if manned {
+                                shot_camera.following = Some(stone_entity);
+                            }
+                            info!("catapult: loosed stone at {:.1} m/s", velocity.length());
                         }
-                        // Tip velocity: omega x r, in the catapult's frame.
-                        let speed = catapult.angular_velocity.abs() * TIP_RADIUS;
-                        let a = ARM_RELEASE;
-                        let local = Vec3::new(0.0, a.cos(), a.sin()) * speed;
-                        let velocity = root.rotation * local;
-                        info!("catapult: loosed stone at {:.1} m/s", velocity.length());
-                        commands.entity(stone_entity).remove::<SeatedStone>().insert((
-                            RigidBody::Dynamic,
-                            Collider::sphere(STONE_RADIUS),
-                            ColliderDensity(STONE_DENSITY),
-                            Friction::new(0.7),
-                            Restitution::new(0.1),
-                            SweptCcd::default(),
-                            Projectile,
-                            CollisionEventsEnabled,
-                            PreTickVelocity(velocity),
-                            TransformInterpolation,
-                            LinearVelocity(velocity.adjust_precision()),
-                        ));
-                        let _ = stone_transform;
                     }
                 }
                 if catapult.angle <= ARM_STOP {
                     catapult.angle = ARM_STOP;
                     catapult.phase = Phase::Resetting;
+                } else {
+                    catapult.phase = Phase::Swinging { released };
                 }
             }
             Phase::Resetting => {
-                catapult.angle += 1.4 * dt;
+                // Fast reset: ready to wind again in about half a second.
+                catapult.angle += 3.2 * dt;
                 if catapult.angle >= ARM_COCKED {
                     catapult.angle = ARM_COCKED;
                     catapult.charge = 0.0;
@@ -424,6 +473,123 @@ fn wind_and_loose(
     }
 }
 
+/// Dotted arc from the spoon to the predicted landing point, live while
+/// aiming and winding.
+fn trajectory_preview(
+    mut gizmos: Gizmos,
+    manning: Res<Manning>,
+    shot_camera: Res<ShotCamera>,
+    catapults: Query<(&Transform, &Catapult)>,
+) {
+    let Some(active) = manning.0 else {
+        return;
+    };
+    if shot_camera.following.is_some() {
+        return;
+    }
+    let Ok((root, catapult)) = catapults.get(active) else {
+        return;
+    };
+    let charge = match catapult.phase {
+        Phase::Winding => catapult.charge,
+        _ => 0.25,
+    };
+    let (mut position, mut velocity) = release_state(root, charge);
+
+    let mut points = vec![position];
+    for _ in 0..400 {
+        velocity.y -= 9.81 * 0.05;
+        position += velocity * 0.05;
+        points.push(position);
+        if position.y < terrain_height(position.x, position.z) {
+            break;
+        }
+    }
+    let intensity = 0.4 + charge * 0.6;
+    gizmos.linestrip(points.iter().copied(), Color::srgb(1.0, 0.85 * intensity, 0.2));
+    if let Some(landing) = points.last() {
+        gizmos.sphere(Isometry3d::from_translation(*landing), 1.2, Color::srgb(1.0, 0.3, 0.15));
+    }
+}
+
+/// While manning: an elevated chase view behind the catapult; after firing
+/// the camera follows the stone downrange until the player clicks.
+fn catapult_camera(
+    manning: Res<Manning>,
+    mut shot_camera: ResMut<ShotCamera>,
+    time: Res<Time>,
+    catapults: Query<&Transform, (With<Catapult>, Without<MainCamera>)>,
+    players: Query<&Transform, (With<Player>, Without<Catapult>, Without<MainCamera>)>,
+    stones: Query<(&Transform, Option<&LinearVelocity>), (With<Projectile>, Without<Player>, Without<Catapult>, Without<MainCamera>)>,
+    mut cameras: Query<&mut Transform, With<MainCamera>>,
+    mut was_overriding: Local<bool>,
+) {
+    let Ok(player) = players.single() else {
+        return;
+    };
+    let Ok(mut camera) = cameras.single_mut() else {
+        return;
+    };
+
+    let desired: Option<(Vec3, Vec3)> = if let Some(active) = manning.0 {
+        if let Some(stone) = shot_camera.following {
+            match stones.get(stone) {
+                Ok((stone_transform, velocity)) => {
+                    // Stop following once the stone has effectively stopped.
+                    let speed = velocity.map(|v| v.length()).unwrap_or(0.0);
+                    if speed < 1.5 {
+                        shot_camera.following = None;
+                    }
+                    let back = velocity
+                        .map(|v| Vec3::new(v.x, 0.0, v.z).normalize_or_zero())
+                        .unwrap_or(Vec3::Z)
+                        * -14.0;
+                    Some((
+                        stone_transform.translation + back + Vec3::Y * 6.0,
+                        stone_transform.translation,
+                    ))
+                }
+                Err(_) => {
+                    shot_camera.following = None;
+                    None
+                }
+            }
+        } else if let Ok(root) = catapults.get(active) {
+            // Behind and above the machine, looking down the aim line.
+            let eye = root.translation + root.rotation * Vec3::new(0.0, 7.5, 13.0);
+            let target = root.translation + root.rotation * Vec3::new(0.0, 3.0, -30.0);
+            Some((eye, target))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    match desired {
+        Some((eye, target)) => {
+            // Convert the desired world pose into the camera's local frame
+            // (it is a child of the player).
+            let world = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+            let inv = player.rotation.inverse();
+            let goal_translation = inv * (world.translation - player.translation);
+            let goal_rotation = inv * world.rotation;
+            let blend = (time.delta_secs() * 5.0).min(1.0);
+            camera.translation = camera.translation.lerp(goal_translation, blend);
+            camera.rotation = camera.rotation.slerp(goal_rotation, blend);
+            *was_overriding = true;
+        }
+        None => {
+            if *was_overriding {
+                // Back to first-person eye height.
+                camera.translation = Vec3::new(0.0, 0.6, 0.0);
+                camera.rotation = Quat::IDENTITY;
+                *was_overriding = false;
+            }
+        }
+    }
+}
+
 #[derive(Component)]
 struct HintText;
 
@@ -431,12 +597,17 @@ struct HintText;
 fn hint_text(
     mut commands: Commands,
     manning: Res<Manning>,
+    shot_camera: Res<ShotCamera>,
     players: Query<&Transform, With<Player>>,
     catapults: Query<&Transform, With<Catapult>>,
     mut hints: Query<(Entity, &mut Text), With<HintText>>,
 ) {
     let message = if manning.0.is_some() {
-        "Aim with the mouse — hold Left Click to wind, release to loose — E to step off"
+        if shot_camera.following.is_some() {
+            "Click to wind the next shot — E to step off"
+        } else {
+            "Aim with the mouse — hold Left Click to wind, release to loose — E to step off"
+        }
     } else if players.single().is_ok_and(|player| {
         catapults
             .iter()
