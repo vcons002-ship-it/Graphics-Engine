@@ -6,7 +6,7 @@ use avian3d::prelude::*;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::{CascadeShadowConfigBuilder, light_consts::lux};
+use bevy::light::{AtmosphereEnvironmentMapLight, CascadeShadowConfigBuilder, light_consts::lux};
 use bevy::pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -81,6 +81,7 @@ fn late_decorate(
             Exposure { ev100: 13.0 },
             Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
             AtmosphereSettings::default(),
+            AtmosphereEnvironmentMapLight::default(),
             Msaa::Off,
             Fxaa::default(),
         ));
