@@ -74,6 +74,10 @@ near-overhead sun is a useless shadow test — shadows hide under objects.
 
 ### Open items
 
+- `firstlight_install.ps1` / `firstlight_update.ps1` / `firstlight_start.ps1`
+  (repo root) handle Windows setup, updates, and launching. Parse-checked with
+  pwsh; not yet executed on a real Windows machine.
+
 - Real-hardware verification: FPS numbers, controller feel, physics weight —
   needs a playtest on the target Windows/RTX 5090 machine.
 - The FPS overlay needs `--features dev` or `--features dev_tools`; plain
