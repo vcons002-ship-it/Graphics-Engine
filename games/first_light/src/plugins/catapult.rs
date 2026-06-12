@@ -126,9 +126,10 @@ const SEAT: Vec3 = Vec3::new(0.0, 0.5, TIP_RADIUS - 0.15);
 const STONE_RADIUS: f32 = 0.55;
 /// Granite.
 const STONE_DENSITY: f32 = 2600.0;
-/// Spring angular acceleration (rad/s^2) by charge: ~57–85 m/s at the tip.
+/// Spring angular acceleration (rad/s^2) by charge: ~43–81 m/s at the tip,
+/// i.e. from "foot of the curtain wall" to "far over the castle".
 fn spring_acceleration(charge: f32) -> f32 {
-    15.0 + 55.0 * charge
+    6.0 + 64.0 * charge
 }
 /// Seconds of held click for full charge.
 const WIND_TIME: f32 = 2.2;
