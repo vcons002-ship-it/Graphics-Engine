@@ -74,6 +74,12 @@ near-overhead sun is a useless shadow test — shadows hide under objects.
 
 ### Open items
 
+- `firstlight_install.bat` / `firstlight_update.bat` / `firstlight_start.bat`
+  (repo root) handle Windows setup, updates, and launching — double-click to
+  run. Each checks for existing installs (vswhere for the MSVC workload,
+  `where` for rustup/cargo/blender) before installing anything. CRLF endings
+  enforced via .gitattributes. Not yet executed on a real Windows machine.
+
 - Real-hardware verification: FPS numbers, controller feel, physics weight —
   needs a playtest on the target Windows/RTX 5090 machine.
 - The FPS overlay needs `--features dev` or `--features dev_tools`; plain
