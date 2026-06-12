@@ -450,6 +450,12 @@ fn projectile_impacts(
             continue;
         };
         let speed = velocity.0.length();
+        // TEMP DIAGNOSTIC: trace every projectile contact.
+        info!(
+            "projectile contact: cached {speed:.1} m/s at {:?}, other={:?}",
+            transforms.get(projectile).map(|t| t.translation),
+            event.collider2
+        );
         if speed < 6.0 {
             continue;
         }
