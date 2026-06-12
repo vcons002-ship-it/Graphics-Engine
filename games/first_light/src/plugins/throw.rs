@@ -40,7 +40,7 @@ fn setup_throw_assets(
         material: materials.add(StandardMaterial {
             base_color: Color::BLACK,
             // Bright enough to bloom against full daylight.
-            emissive: LinearRgba::rgb(0.4, 1.4, 2.0) * 15_000.0,
+            emissive: LinearRgba::rgb(0.4, 1.4, 2.0) * 4_000.0,
             ..default()
         }),
     });

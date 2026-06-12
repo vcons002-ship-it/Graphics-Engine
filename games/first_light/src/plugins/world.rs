@@ -39,6 +39,7 @@ impl Plugin for WorldPlugin {
             .to_vec(),
         ))
         .add_systems(Startup, spawn_player_on_terrain)
+        .add_systems(Update, debug_probe)
         .add_systems(
             Update,
             (despawn_respawnables, spawn_player_on_terrain)
@@ -60,6 +61,7 @@ fn spawn_player_on_terrain(mut commands: Commands) {
         .unwrap_or((6.0, PLAYGROUND_CENTER.y + 20.0, 0.0));
 
     let y = terrain_height(x, z) + 1.5;
+    info!("player: spawn at ({x}, {y}, {z}) yaw {yaw}");
     let player = spawn_player(&mut commands, Vec3::new(x, y, z));
     commands
         .entity(player)
@@ -67,6 +69,27 @@ fn spawn_player_on_terrain(mut commands: Commands) {
             Respawnable,
             Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_y(yaw.to_radians())),
         ));
+}
+
+fn debug_probe(
+    mut frame: Local<u32>,
+    cameras: Query<&GlobalTransform, With<MainCamera>>,
+    players: Query<&Transform, With<Player>>,
+    meshes: Query<&Mesh3d>,
+    crates: Query<&Transform, (With<Respawnable>, Without<Player>)>,
+) {
+    *frame += 1;
+    if *frame % 10 != 0 {
+        return;
+    }
+    let cam = cameras.single().map(|c| c.translation()).unwrap_or(Vec3::NAN);
+    let player = players.single().map(|p| p.translation).unwrap_or(Vec3::NAN);
+    let crate_pos = crates.iter().next().map(|t| t.translation).unwrap_or(Vec3::NAN);
+    info!(
+        "probe f{}: camera {cam}, player {player}, crate {crate_pos}, meshes {}",
+        *frame,
+        meshes.iter().count()
+    );
 }
 
 fn despawn_respawnables(mut commands: Commands, entities: Query<Entity, With<Respawnable>>) {

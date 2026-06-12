@@ -89,6 +89,7 @@ fn spawn_castle(
     };
 
     let origin = Vec3::new(CASTLE_CENTER.x, TERRACE_HEIGHT, CASTLE_CENTER.y);
+    info!("castle: spawning at {origin}");
     let c = &mut commands;
     let a = &assets;
 

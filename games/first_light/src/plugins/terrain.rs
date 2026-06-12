@@ -185,9 +185,8 @@ fn ground_color(x: f32, z: f32, height: f32, normal: Vec3) -> [f32; 4] {
     [color.x, color.y, color.z, 1.0]
 }
 
-/// Mesh resolution (vertices per side) and collider resolution.
+/// Mesh resolution (vertices per side).
 const MESH_RES: usize = 257;
-const COLLIDER_RES: usize = 129;
 
 fn spawn_terrain(
     mut commands: Commands,
@@ -236,18 +235,12 @@ fn spawn_terrain(
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
     .with_inserted_indices(Indices::U32(indices));
 
-    // --- Collider (parry heightfield: rows advance along Z, columns along X,
-    // centered, spanning scale.x by scale.z) --------------------------------
-    let cn = COLLIDER_RES;
-    let cstep = TERRAIN_SIZE / (cn - 1) as f32;
-    let heights: Vec<Vec<f32>> = (0..cn)
-        .map(|j| {
-            (0..cn)
-                .map(|i| terrain_height(-half + i as f32 * cstep, -half + j as f32 * cstep))
-                .collect()
-        })
-        .collect();
+    // --- Collider: trimesh built from the exact visual mesh, so collision
+    // and visuals can never disagree. (A parry heightfield would be cheaper,
+    // but produced no contacts at all under avian 0.6.1 — see DEVLOG.) ------
+    let collider = Collider::trimesh_from_mesh(&mesh).expect("terrain mesh is a valid trimesh");
 
+    info!("terrain: {} vertices, trimesh collider", MESH_RES * MESH_RES);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -257,7 +250,7 @@ fn spawn_terrain(
         })),
         Transform::IDENTITY,
         RigidBody::Static,
-        Collider::heightfield(heights, Vec3::new(TERRAIN_SIZE, 1.0, TERRAIN_SIZE)),
+        collider,
     ));
 
     // --- Lake water --------------------------------------------------------
