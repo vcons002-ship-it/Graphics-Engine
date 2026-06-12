@@ -15,6 +15,7 @@ use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use super::audio::{SoundEvent, SoundKind};
 use super::masonry::{PreTickVelocity, Projectile};
 use super::terrain::{CASTLE_CENTER, KNOLL_CENTER, terrain_height};
 use super::world::Respawnable;
@@ -108,6 +109,8 @@ struct ShotCamera {
 struct Trebuchet {
     phase: Phase,
     charge: f32,
+    /// Winch-creak cadence accumulator while winding.
+    creak: f32,
     /// Current arm angle in radians (see [`ARM_COCKED`]).
     angle: f32,
     /// Angular velocity during the swing (rad/s, negative = firing).
@@ -226,6 +229,7 @@ fn spawn_trebuchet(mut commands: Commands, assets: Res<TrebuchetAssets>) {
             Trebuchet {
                 phase: Phase::Ready,
                 charge: 0.0,
+                creak: 0.0,
                 angle: ARM_COCKED,
                 angular_velocity: 0.0,
             },
@@ -432,6 +436,7 @@ fn wind_and_loose(
     buttons: Res<ButtonInput<MouseButton>>,
     manning: Res<Manning>,
     mut shot_camera: ResMut<ShotCamera>,
+    mut sounds: MessageWriter<SoundEvent>,
     assets: Res<TrebuchetAssets>,
     mut trebuchets: Query<(Entity, &Transform, &mut Trebuchet)>,
     mut arms: Query<(&ChildOf, &mut Transform), (With<TrebuchetArm>, Without<Trebuchet>, Without<CounterweightHanger>)>,
@@ -463,6 +468,15 @@ fn wind_and_loose(
             Phase::Winding => {
                 trebuchet.charge = (trebuchet.charge + dt / WIND_TIME).min(1.0);
                 trebuchet.angle = ARM_COCKED + trebuchet.charge * WIND_BACK;
+                trebuchet.creak += dt;
+                if trebuchet.creak > 0.38 {
+                    trebuchet.creak = 0.0;
+                    sounds.write(SoundEvent {
+                        kind: SoundKind::Creak,
+                        position: root.translation + Vec3::Y * 5.0,
+                        intensity: 0.8,
+                    });
+                }
                 if !manned || !buttons.pressed(MouseButton::Left) {
                     trebuchet.phase = Phase::Swinging { released: false };
                     trebuchet.angular_velocity = 0.0;
@@ -512,6 +526,11 @@ fn wind_and_loose(
                                 shot_camera.held_eye = None;
                                 shot_camera.rest_timer = 0.0;
                             }
+                            sounds.write(SoundEvent {
+                                kind: SoundKind::Whoosh,
+                                position: root.translation + Vec3::Y * 8.0,
+                                intensity: 0.5 + trebuchet.charge * 0.5,
+                            });
                             info!("trebuchet: loosed stone at {:.1} m/s", velocity.length());
                         }
                     }
@@ -519,6 +538,11 @@ fn wind_and_loose(
                 if trebuchet.angle <= ARM_STOP {
                     trebuchet.angle = ARM_STOP;
                     trebuchet.phase = Phase::Resetting;
+                    sounds.write(SoundEvent {
+                        kind: SoundKind::FrameThunk,
+                        position: root.translation + Vec3::Y * 4.0,
+                        intensity: 0.6 + trebuchet.charge * 0.4,
+                    });
                 } else {
                     trebuchet.phase = Phase::Swinging { released };
                 }

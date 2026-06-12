@@ -37,6 +37,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::collections::VecDeque;
 
+use super::audio::{SoundEvent, SoundKind};
 use super::scoring::DestructionTally;
 use super::world::Respawnable;
 
@@ -382,6 +383,7 @@ fn fracture(
     counter: &mut FragmentCounter,
     queue: &mut SupportQueue,
     tally: &mut DestructionTally,
+    sounds: &mut MessageWriter<SoundEvent>,
     spatial: &SpatialQuery,
     blocks: &Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     cones: &Query<(), With<ConeShape>>,
@@ -442,6 +444,11 @@ fn fracture(
     }
 
     tally.add(3);
+    sounds.write(SoundEvent {
+        kind: SoundKind::RockCrack,
+        position: transform.translation,
+        intensity: (size.x * size.y * size.z / 3.0).clamp(0.3, 1.0),
+    });
     let reach = size.max_element() * 1.4 + 0.4;
     let position = transform.translation;
     commands.entity(entity).try_despawn();
@@ -457,6 +464,7 @@ fn apply_damage(
     counter: &mut FragmentCounter,
     queue: &mut SupportQueue,
     tally: &mut DestructionTally,
+    sounds: &mut MessageWriter<SoundEvent>,
     spatial: &SpatialQuery,
     blocks: &Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     cones: &Query<(), With<ConeShape>>,
@@ -481,7 +489,7 @@ fn apply_damage(
             let v = velocity.map(|v| Vec3::new(v.x, v.y, v.z)).unwrap_or(Vec3::ZERO);
             let transform = *transform;
             fracture(
-                commands, assets, counter, queue, tally, spatial, blocks, cones, entity,
+                commands, assets, counter, queue, tally, sounds, spatial, blocks, cones, entity,
                 &transform, v,
             );
         }
@@ -513,6 +521,7 @@ fn projectile_impacts(
     mut counter: ResMut<FragmentCounter>,
     mut tally: ResMut<DestructionTally>,
     mut shake: ResMut<ImpactShake>,
+    mut sounds: MessageWriter<SoundEvent>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
     cones: Query<(), With<ConeShape>>,
@@ -557,8 +566,8 @@ fn projectile_impacts(
         let mut direct_shattered = 0;
         if blocks.contains(struck)
             && apply_damage(
-                &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial, &blocks,
-                &cones, &mut damageable, struck, energy * 0.55,
+                &mut commands, &assets, &mut counter, &mut queue, &mut tally, &mut sounds,
+                &spatial, &blocks, &cones, &mut damageable, struck, energy * 0.55,
             )
         {
             direct_shattered += 1;
@@ -590,15 +599,20 @@ fn projectile_impacts(
             }
             let share = energy * 0.30 * weight / total_weight;
             if apply_damage(
-                &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial, &blocks,
-                &cones, &mut damageable, *target, share,
+                &mut commands, &assets, &mut counter, &mut queue, &mut tally, &mut sounds,
+                &spatial, &blocks, &cones, &mut damageable, *target, share,
             ) {
                 shattered += 1;
             }
         }
-        // Stone-on-stone weight: screen shake and a burst of dust.
+        // Stone-on-stone weight: screen shake, dust, and a deep thud.
         shake.0 = (shake.0 + (energy / 3.0e6).clamp(0.15, 1.0)).min(1.2);
         spawn_dust(&mut commands, &assets, impact_at, energy);
+        sounds.write(SoundEvent {
+            kind: SoundKind::StoneImpact,
+            position: impact_at,
+            intensity: (energy / 4.0e6).clamp(0.25, 1.0),
+        });
         info!(
             "impact at {impact_at:.1}: {speed:.0} m/s, {energy:.0} J over {} blocks (r={radius:.1}), {shattered} shattered",
             hits.len()
@@ -620,6 +634,7 @@ fn crush_damage(
     mut queue: ResMut<SupportQueue>,
     mut counter: ResMut<FragmentCounter>,
     mut tally: ResMut<DestructionTally>,
+    mut sounds: MessageWriter<SoundEvent>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
     cones: Query<(), With<ConeShape>>,
@@ -664,12 +679,19 @@ fn crush_damage(
             continue;
         }
         handled += 1;
+        if let Ok((t, _)) = blocks.get(a).or(blocks.get(b)) {
+            sounds.write(SoundEvent {
+                kind: SoundKind::StoneImpact,
+                position: t.translation,
+                intensity: (energy / 1.5e6).clamp(0.1, 0.7),
+            });
+        }
 
         for target in [a, b] {
             if damageable.contains(target) {
                 apply_damage(
-                    &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial,
-                    &blocks, &cones, &mut damageable, target, energy * 0.5,
+                    &mut commands, &assets, &mut counter, &mut queue, &mut tally, &mut sounds,
+                    &spatial, &blocks, &cones, &mut damageable, target, energy * 0.5,
                 );
             }
         }
