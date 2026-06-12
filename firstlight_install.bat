@@ -14,8 +14,7 @@ setlocal
 cd /d "%~dp0"
 title First Light - Install
 set "REPO_URL=https://github.com/vcons002-ship-it/graphics-engine.git"
-rem TODO: switch BRANCH to main once the demo branch is merged.
-set "BRANCH=claude/first-light-demo-setup-1g6fxj"
+set "BRANCH=main"
 set "GAME_DIR=%USERPROFILE%\Games\Graphics-Engine"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
