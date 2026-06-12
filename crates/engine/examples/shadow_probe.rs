@@ -2,6 +2,12 @@
 //! directional light, no engine plugins/atmosphere/physics. Saves
 //! `screenshots/probe.png` at frame 60 and exits.
 
+use bevy::anti_alias::fxaa::Fxaa;
+use bevy::camera::Exposure;
+use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::light::{CascadeShadowConfigBuilder, light_consts::lux};
+use bevy::pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium};
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
@@ -17,6 +23,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut scattering_mediums: ResMut<Assets<ScatteringMedium>>,
 ) {
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(20.0, 20.0))),
@@ -29,14 +36,28 @@ fn setup(
     ));
     commands.spawn((
         DirectionalLight {
+            illuminance: lux::RAW_SUNLIGHT,
             shadows_enabled: true,
             ..default()
         },
         Transform::default().looking_to(Vec3::new(-0.5, -1.0, -0.3), Vec3::Y),
+        CascadeShadowConfigBuilder {
+            first_cascade_far_bound: 12.0,
+            maximum_distance: 150.0,
+            ..default()
+        }
+        .build(),
     ));
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(-3.0, 4.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Tonemapping::TonyMcMapface,
+        Bloom::NATURAL,
+        Exposure { ev100: 13.0 },
+        Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
+        AtmosphereSettings::default(),
+        Msaa::Off,
+        Fxaa::default(),
     ));
 }
 
