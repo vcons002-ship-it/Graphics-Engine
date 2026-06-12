@@ -25,14 +25,16 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut scattering_mediums: ResMut<Assets<ScatteringMedium>>,
 ) {
+    // Demo-scale geometry: huge ground slab, cube 14 m from the camera.
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(20.0, 20.0))),
+        Mesh3d(meshes.add(Cuboid::new(400.0, 0.2, 400.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.7, 0.7, 0.7))),
+        Transform::from_xyz(0.0, -0.1, 0.0),
     ));
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.8, 0.6, 0.4))),
-        Transform::from_xyz(0.0, 0.5, 0.0),
+        Transform::from_xyz(0.0, 0.5, -4.0),
     ));
     commands.spawn((
         DirectionalLight {
@@ -40,7 +42,7 @@ fn setup(
             shadows_enabled: true,
             ..default()
         },
-        Transform::default().looking_to(Vec3::new(-0.5, -1.0, -0.3), Vec3::Y),
+        Transform::default().looking_to(Vec3::new(-0.25, -1.0, -0.25), Vec3::Y),
         CascadeShadowConfigBuilder {
             first_cascade_far_bound: 12.0,
             maximum_distance: 150.0,
@@ -50,7 +52,7 @@ fn setup(
     ));
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(-3.0, 4.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(0.0, 2.1, 10.0).looking_at(Vec3::new(0.0, 1.0, -4.0), Vec3::Y),
         Tonemapping::TonyMcMapface,
         Bloom::NATURAL,
         Exposure { ev100: 13.0 },
