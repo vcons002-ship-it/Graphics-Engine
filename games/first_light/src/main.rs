@@ -1,4 +1,5 @@
-//! First Light — a sunlit first-person physics playground.
+//! First Light — a first-person physics playground in a mountain valley,
+//! beneath a stone castle.
 //!
 //! App builder only: engine plugins + this game's plugins.
 
@@ -20,6 +21,9 @@ fn main() {
         }))
         .add_plugins(EnginePlugins)
         .add_plugins((
+            plugins::terrain::TerrainPlugin,
+            plugins::castle::CastlePlugin,
+            plugins::vegetation::VegetationPlugin,
             plugins::world::WorldPlugin,
             plugins::props::PropsPlugin,
             plugins::throw::ThrowPlugin,

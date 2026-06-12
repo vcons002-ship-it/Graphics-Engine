@@ -29,7 +29,14 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<CursorLocked>()
             .init_resource::<LookSensitivity>()
             .add_systems(PreUpdate, keyboard_input)
-            .add_systems(Update, (cursor_grab, mouse_look).chain())
+            .add_systems(
+                Update,
+                (
+                    cursor_grab.run_if(in_state(crate::menu::MenuState::Closed)),
+                    mouse_look,
+                )
+                    .chain(),
+            )
             .add_systems(
                 FixedUpdate,
                 (
@@ -221,10 +228,11 @@ fn keyboard_input(
     }
 }
 
-/// Click grabs the cursor for mouse look; Esc releases it.
+/// Click grabs the cursor for mouse look while no menu is open. Esc is owned
+/// by the pause menu, which releases the cursor on open and re-grabs it on
+/// resume.
 fn cursor_grab(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     mut locked: ResMut<CursorLocked>,
     mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
@@ -235,10 +243,6 @@ fn cursor_grab(
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
         locked.0 = true;
-    } else if locked.0 && keys.just_pressed(KeyCode::Escape) {
-        cursor.grab_mode = CursorGrabMode::None;
-        cursor.visible = true;
-        locked.0 = false;
     }
 }
 

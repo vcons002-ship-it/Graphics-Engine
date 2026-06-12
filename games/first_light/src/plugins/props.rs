@@ -3,14 +3,23 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use engine::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+use super::terrain::{PLAYGROUND_CENTER, terrain_height};
+use super::world::Respawnable;
 
 pub struct PropsPlugin;
 
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_crate_stack, spawn_scattered_props));
+        app.add_systems(Startup, (spawn_crate_stack, spawn_scattered_props))
+            .add_systems(
+                Update,
+                (spawn_crate_stack, spawn_scattered_props)
+                    .run_if(on_message::<RestartRequested>),
+            );
     }
 }
 
@@ -37,20 +46,23 @@ fn spawn_crate_stack(
         ..default()
     });
 
-    // A pyramid: rows of 5, 4, 3, 2, 1 crates, slightly separated so the
-    // solver settles them rather than spawning in contact.
+    // A pyramid on the playground pad: rows of 5, 4, 3, 2, 1 crates, slightly
+    // separated so the solver settles them rather than spawning in contact.
+    let center_z = PLAYGROUND_CENTER.y - 12.0;
+    let base_y = terrain_height(PLAYGROUND_CENTER.x, center_z);
     let gap = CRATE_SIZE + 0.02;
     for (row, width) in [5, 4, 3, 2, 1].into_iter().enumerate() {
         for i in 0..width {
             let x = (i as f32 - (width as f32 - 1.0) / 2.0) * gap;
-            let y = CRATE_SIZE / 2.0 + row as f32 * gap;
+            let y = base_y + CRATE_SIZE / 2.0 + row as f32 * gap;
             commands.spawn((
                 Mesh3d(crate_mesh.clone()),
                 MeshMaterial3d(crate_material.clone()),
-                Transform::from_xyz(x, y + 0.01, -4.0),
+                Transform::from_xyz(x, y + 0.05, center_z),
                 RigidBody::Dynamic,
                 Collider::cuboid(CRATE_SIZE, CRATE_SIZE, CRATE_SIZE),
                 TransformInterpolation,
+                Respawnable,
             ));
         }
     }
@@ -70,19 +82,21 @@ fn spawn_scattered_props(
         // Scatter in a ring around the origin, keeping the crate-stack and
         // spawn areas clear. Emissive props go on the sun-facing (+X) side so
         // their bloom doesn't sit inside the crate stack's shadow.
-        let emissive = i % 5 == 1;
+        let emissive = i % 10 == 1;
         let angle = if emissive {
             (r1 - 0.5) * std::f32::consts::PI
         } else {
             r1 * std::f32::consts::TAU
         };
-        let radius = 8.0 + r2 * 18.0;
-        let position = Vec3::new(angle.cos() * radius, 3.0 + r3 * 2.0, angle.sin() * radius);
+        let radius = 7.0 + r2 * 14.0;
+        let x = PLAYGROUND_CENTER.x + angle.cos() * radius;
+        let z = PLAYGROUND_CENTER.y + angle.sin() * radius;
+        let position = Vec3::new(x, terrain_height(x, z) + 2.0 + r3 * 2.0, z);
 
         let base_color = Color::hsl(r4 * 360.0, 0.55, 0.5);
-        let material = match i % 5 {
+        let material = match i % 10 {
             // Polished metal.
-            0 => StandardMaterial {
+            0 | 5 => StandardMaterial {
                 base_color,
                 metallic: 1.0,
                 perceptual_roughness: 0.15,
@@ -92,7 +106,7 @@ fn spawn_scattered_props(
             // flare whiting out the ground around it.
             1 => StandardMaterial {
                 base_color: Color::BLACK,
-                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 5_000.0,
+                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 1_200.0,
                 ..default()
             },
             // Rough diffuse.
@@ -128,6 +142,7 @@ fn spawn_scattered_props(
             RigidBody::Dynamic,
             collider,
             TransformInterpolation,
+            Respawnable,
         ));
     }
 }

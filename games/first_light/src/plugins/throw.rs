@@ -5,6 +5,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use engine::prelude::*;
 
+use super::world::Respawnable;
+
 pub struct ThrowPlugin;
 
 impl Plugin for ThrowPlugin {
@@ -38,7 +40,7 @@ fn setup_throw_assets(
         material: materials.add(StandardMaterial {
             base_color: Color::BLACK,
             // Bright enough to bloom against full daylight.
-            emissive: LinearRgba::rgb(0.4, 1.4, 2.0) * 15_000.0,
+            emissive: LinearRgba::rgb(0.4, 1.4, 2.0) * 4_000.0,
             ..default()
         }),
     });
@@ -69,6 +71,7 @@ fn throw_cube(
         Collider::cuboid(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE),
         LinearVelocity((direction * THROW_SPEED).adjust_precision()),
         TransformInterpolation,
+        Respawnable,
         Expires(Timer::from_seconds(CUBE_LIFETIME_SECS, TimerMode::Once)),
     ));
 }

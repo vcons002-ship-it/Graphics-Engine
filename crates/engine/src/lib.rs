@@ -5,6 +5,7 @@
 pub mod camera;
 pub mod debug;
 pub mod lighting;
+pub mod menu;
 pub mod physics;
 pub mod player;
 
@@ -22,6 +23,7 @@ impl PluginGroup for EnginePlugins {
             .add(camera::CameraPlugin)
             .add(lighting::LightingPlugin)
             .add(player::PlayerPlugin)
+            .add(menu::MenuPlugin)
             .add(debug::DebugPlugin)
     }
 }
@@ -29,6 +31,8 @@ impl PluginGroup for EnginePlugins {
 pub mod prelude {
     pub use crate::EnginePlugins;
     pub use crate::camera::MainCamera;
+    pub use crate::debug::FpsCounterEnabled;
     pub use crate::lighting::SunSettings;
+    pub use crate::menu::{ControlsHelp, MenuState, RestartRequested};
     pub use crate::player::{CursorLocked, Player, spawn_player};
 }

@@ -4,10 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-# Dev loop: dynamic linking for fast rebuilds + dev tooling.
-dev = ["bevy/dynamic_linking", "dev_tools"]
-# Dev tooling alone (usable with --release for FPS measurements).
-dev_tools = ["engine/dev_tools"]
+# Dev loop: dynamic linking for fast rebuilds. The FPS counter is built in
+# (F3 / pause menu), so no separate dev_tools feature is needed.
+dev = ["bevy/dynamic_linking"]
 
 [dependencies]
 bevy = { workspace = true }

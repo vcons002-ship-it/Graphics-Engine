@@ -1,5 +1,65 @@
 # DEVLOG
 
+## Entry #2 — 2026-06-12 — Pause menu, mountain valley, castle
+
+Same stack as Entry #1 (bevy 0.18.1, avian3d 0.6.1). Verified on the
+user's Windows machine via the installer; FPS counter was missing in their
+build because the overlay was behind the removed `dev_tools` feature.
+
+### What was built
+
+- **Engine `MenuPlugin`** (`crates/engine/src/menu.rs`): Esc opens a pause
+  menu (pauses `Time<Virtual>`, releases the cursor). Screens: Main
+  (Resume/Controls/Settings/Restart/Exit), Controls (rows from the
+  `ControlsHelp` resource — games override it), Settings (VSync,
+  Fullscreen, FPS counter toggles with live labels). `RestartRequested`
+  message lets the game rebuild its world; Exit writes `AppExit`. Esc
+  handling moved out of the player controller; the menu owns cursor state.
+  Bevy `States` + `DespawnOnExit` per screen. Note: `BorderRadius` is a
+  `Node` field in 0.18, not a component.
+- **Built-in FPS counter** in `DebugPlugin` (FrameTimeDiagnosticsPlugin +
+  small text overlay, F3 toggle, on by default). The `dev_tools` cargo
+  feature is gone; `dev` is just dynamic linking now.
+- **Mountain valley terrain** (`terrain.rs`): hand-rolled value-noise fBm
+  (no new deps), U-shaped valley with headwall, castle terrace + spawn-pad
+  flattening, walkable ~25° causeway carved into the slope, lake basin,
+  vertex-colored mesh (grass/rock/snow/shore/cobble road) at 257², and a
+  **trimesh collider built from the exact visual mesh**.
+- **Castle** (`castle.rs`): parametric — crenellated curtain walls, four
+  corner towers with slate cone roofs, twin-tower gatehouse over the
+  causeway, keep with corner turrets, 38 m great tower with banner, warm
+  emissive windows, courtyard hall/stables. Large surfaces use a
+  procedurally generated tileable ashlar texture (256² Image, repeat
+  sampler) with per-piece `uv_transform` scaling so blocks stay ~1 m.
+- **Vegetation** (`vegetation.rs`): ~320 pines (shared cone/cylinder
+  meshes, 4 canopy materials), 80 boulders, 150 bushes, deterministic
+  rejection sampling honoring slope/height bands and keep-clear zones.
+- Playground (crates/props/throw) relocated to a flat pad on the valley
+  floor; props sit on `terrain_height`. Restart despawns `Respawnable`
+  entities (player + dynamics) and respawns them.
+
+### Hard-won lessons
+
+- **avian3d 0.6.1 `Collider::heightfield` produced no contacts at all**
+  (player and crates fell straight through; diagnosed with a probe system
+  logging positions). Switched to `Collider::trimesh_from_mesh` on the
+  visual mesh — works, and guarantees collision/visual parity. Worth
+  re-testing heightfield on the next avian upgrade.
+- parry's heightfield convention is `heights_zx` (rows advance along Z) —
+  avian 0.6.1's doc comment claims the opposite; trust parry's source.
+- Headless verification hooks now in the engine: `ENGINE_AUTO_SCREENSHOT`,
+  `ENGINE_AUTO_MENU=<frame>[:screen]`, and the game's `FL_SPAWN="x,z,yaw"`.
+
+### Open issues
+
+- Restart and menu interactions verified by code review + screenshots of
+  every screen; needs a real playtest (clicking buttons headless isn't
+  wired).
+- Castle gate-level vantage screenshots kept hitting terrain occlusion;
+  verify the causeway approach feel in playtest.
+- llvmpipe renders the full scene at ~1 FPS at 720p in this container —
+  meaningless for the 5090, but slow for iteration.
+
 ## Entry #1 — 2026-06-12 — Workspace scaffold + First Light demo
 
 ### Stack (exact resolved versions from Cargo.lock)

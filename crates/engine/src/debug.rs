@@ -1,19 +1,41 @@
-//! Debug tooling: F2 screenshot, F3 FPS overlay toggle (with the `dev_tools`
-//! feature), F4 vsync toggle.
+//! Debug tooling: built-in FPS counter (F3 toggles, on by default),
+//! F2 screenshot, F4 vsync toggle.
 //!
 //! For headless/CI verification, set `ENGINE_AUTO_SCREENSHOT=<frame>` to
 //! capture a screenshot at that frame and exit once it has been saved.
 
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Capturing, Screenshot, save_to_disk};
 use bevy::window::{PresentMode, PrimaryWindow};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Whether the FPS counter is shown. Toggled by F3 and the pause menu.
+#[derive(Resource)]
+pub struct FpsCounterEnabled(pub bool);
+
+impl Default for FpsCounterEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (screenshot_on_f2, toggle_vsync_on_f4));
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default())
+            .init_resource::<FpsCounterEnabled>()
+            .add_systems(Startup, spawn_fps_counter)
+            .add_systems(
+                Update,
+                (
+                    update_fps_counter,
+                    toggle_fps_on_f3,
+                    screenshot_on_f2,
+                    toggle_vsync_on_f4,
+                ),
+            );
 
         if let Some(at_frame) = std::env::var("ENGINE_AUTO_SCREENSHOT")
             .ok()
@@ -25,24 +47,58 @@ impl Plugin for DebugPlugin {
             });
             app.add_systems(Update, auto_screenshot);
         }
+    }
+}
 
-        #[cfg(feature = "dev_tools")]
-        {
-            use bevy::dev_tools::fps_overlay::{
-                FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig,
-            };
-            app.add_plugins(FpsOverlayPlugin {
-                config: FpsOverlayConfig {
-                    frame_time_graph_config: FrameTimeGraphConfig {
-                        enabled: false,
-                        min_fps: 30.0,
-                        target_fps: 144.0,
-                    },
-                    ..default()
-                },
-            });
-            app.add_systems(Update, toggle_fps_overlay_on_f3);
+#[derive(Component)]
+struct FpsCounterText;
+
+fn spawn_fps_counter(mut commands: Commands) {
+    commands.spawn((
+        FpsCounterText,
+        Text::new("FPS --"),
+        TextFont {
+            font_size: 16.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.4, 1.0, 0.5)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(8),
+            left: px(8),
+            ..default()
+        },
+        // Above any menu overlay.
+        GlobalZIndex(i32::MAX),
+    ));
+}
+
+fn update_fps_counter(
+    diagnostics: Res<DiagnosticsStore>,
+    enabled: Res<FpsCounterEnabled>,
+    mut counter: Query<(&mut Text, &mut Visibility), With<FpsCounterText>>,
+) {
+    for (mut text, mut visibility) in &mut counter {
+        *visibility = if enabled.0 {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+        if !enabled.0 {
+            continue;
         }
+        if let Some(fps) = diagnostics
+            .get(&FrameTimeDiagnosticsPlugin::FPS)
+            .and_then(|d| d.smoothed())
+        {
+            text.0 = format!("FPS {fps:.0}");
+        }
+    }
+}
+
+fn toggle_fps_on_f3(input: Res<ButtonInput<KeyCode>>, mut enabled: ResMut<FpsCounterEnabled>) {
+    if input.just_pressed(KeyCode::F3) {
+        enabled.0 = !enabled.0;
     }
 }
 
@@ -103,15 +159,5 @@ fn toggle_vsync_on_f4(
             };
             info!("present mode: {:?}", window.present_mode);
         }
-    }
-}
-
-#[cfg(feature = "dev_tools")]
-fn toggle_fps_overlay_on_f3(
-    input: Res<ButtonInput<KeyCode>>,
-    mut overlay: ResMut<bevy::dev_tools::fps_overlay::FpsOverlayConfig>,
-) {
-    if input.just_pressed(KeyCode::F3) {
-        overlay.enabled = !overlay.enabled;
     }
 }
