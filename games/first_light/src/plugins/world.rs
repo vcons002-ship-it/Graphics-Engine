@@ -31,6 +31,8 @@ impl Plugin for WorldPlugin {
                 ("Jump", "Space"),
                 ("Sprint", "Left Shift"),
                 ("Throw cube", "Left click"),
+                ("Man catapult", "E (when near)"),
+                ("Wind / loose", "Hold / release Left click"),
                 ("Menu", "Esc"),
                 ("Screenshot", "F2"),
                 ("FPS counter", "F3"),

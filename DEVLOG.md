@@ -1,5 +1,65 @@
 # DEVLOG
 
+## Entry #3 — 2026-06-12 — Destructible castle, catapult, fidelity pass
+
+Playtest feedback fixed first: the causeway's smoothstep profile peaked at
+~35° (above the 30° climb limit) and its carve region undercut the
+gatehouse — that was the "floating castle". Now: linear ~24° grade
+topping out at the terrace edge, terrace lowered to 44 m, climb limit
+raised to 40°, and the project's first unit tests pin all of it
+(causeway grade, castle footings, playground flatness — `cargo test`).
+
+### Destructible masonry (the headline)
+
+- Castle rebuilt from **~10k individual mortared stone blocks**
+  (`masonry.rs` + `castle.rs`): walls with alternating courses, ring
+  towers from tangent blocks, keep with solid corner piers, merlons,
+  emissive window blocks. All start `RigidBody::Static`.
+- **Impact waking**: `CollisionStart` events from `Projectile`s (thrown
+  cubes, catapult stones) wake static blocks within a breach radius
+  scaled by kinetic energy (`(E/30k)^(1/3) * 2`, clamped 0.9–5 m).
+- **Support cascade**: woken blocks queue their neighbors; queued static
+  blocks shape-cast a thin box under their base and wake if nothing
+  static holds them up (48 checks/tick, amortized). Walls cave
+  progressively; roof cones are single rigid pieces that topple.
+- Verified end-to-end headless: auto-fired stone at 46 m/s, impact log
+  shows breach r=2.6 m waking 21 blocks at the front wall.
+
+### Catapult (`catapult.rs`)
+
+E to man, view-yaw slews the aim, hold LMB winds (charge), release
+looses. Kinematic arm with **substepped swing integration** (4 ms) —
+naive per-frame Euler released at 62 m/s under llvmpipe's 0.25 s frames.
+Stone: 0.45 m granite sphere (~1 t), `SweptCcd`, fully dynamic from
+release with arm-tip velocity. Full charge ≈ 49 m/s reaches the gate
+uphill at ~200 m. Auto-reload; `FL_AUTO_FIRE=<frame>` fires headless.
+
+### Physics realism
+
+`SubstepCount(8)`; per-material `Friction`/`Restitution`/
+`ColliderDensity` everywhere (granite 2600, masonry 2200, wood 450–600,
+metal props 2700 & slick); projectiles use swept CCD.
+
+### Visual fidelity
+
+- **SSAO** (`ScreenSpaceAmbientOcclusion`) + **volumetric god rays**
+  (`VolumetricFog` on camera, `VolumetricLight` on the sun, a thin
+  `FogVolume` hugging the valley floor).
+- **Terrain albedo megatexture**: 1024² baked ground-color (~0.6 m/texel
+  + micro-variation) replaces vertex colors.
+- Masonry grain texture + 6 stone tints; warm sun color; tapered leaning
+  pines (380, 6 canopy tints); 6 torches (emissive flame + point light)
+  at gate/courtyard/keep.
+
+### Open issues
+
+- The masonry support model has no lateral bridging (a lintel over a gap
+  survives only until disturbed) — acceptable, reads as mortar failure.
+- llvmpipe renders the 10k-block scene at ~1 FPS (stills only); real
+  performance needs the 5090 playtest.
+- Catapult arm is kinematic by design (reliability); the stone and all
+  destruction are fully dynamic.
+
 ## Entry #2 — 2026-06-12 — Pause menu, mountain valley, castle
 
 Same stack as Entry #1 (bevy 0.18.1, avian3d 0.6.1). Verified on the
