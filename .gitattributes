@@ -1,2 +1,4 @@
 # Batch files must keep CRLF line endings — cmd.exe misparses LF-only files.
-*.bat text eol=crlf
+# `-text` stores the bytes verbatim so even raw downloads from GitHub keep
+# CRLF (eol=crlf would store LF internally and only convert on checkout).
+*.bat -text
