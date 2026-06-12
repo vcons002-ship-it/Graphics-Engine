@@ -357,7 +357,7 @@ fn wind_and_loose(
                 // Integrated in small substeps so the release speed is
                 // frame-rate independent (one big Update step would blow
                 // far past the release angle).
-                let acceleration = 18.0 + 34.0 * catapult.charge;
+                let acceleration = 20.0 + 45.0 * catapult.charge;
                 let substeps = (dt / 0.004).ceil().max(1.0) as u32;
                 let sub_dt = dt / substeps as f32;
                 let mut previous = catapult.angle;
