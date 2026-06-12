@@ -48,6 +48,9 @@ impl Plugin for SoldiersPlugin {
                     .chain()
                     .run_if(on_message::<RestartRequested>),
             );
+        if std::env::var("FL_BATTLE_LOG").is_ok() {
+            app.add_systems(Update, battle_log);
+        }
     }
 }
 
@@ -606,6 +609,35 @@ fn debris_kills(
             ));
         }
     }
+}
+
+/// Periodic battle status in the log (`FL_BATTLE_LOG=1`), for headless
+/// verification and tuning.
+fn battle_log(
+    time: Res<Time>,
+    soldiers: Query<(&Soldier, &Transform)>,
+    mut last: Local<f32>,
+) {
+    if time.elapsed_secs() - *last < 8.0 {
+        return;
+    }
+    *last = time.elapsed_secs();
+    let (mut attackers, mut defenders, mut dead) = (0, 0, 0);
+    let mut lead_z = f32::MAX;
+    for (soldier, transform) in &soldiers {
+        if matches!(soldier.state, State::Dead { .. }) {
+            dead += 1;
+            continue;
+        }
+        match soldier.side {
+            Side::Attacker => {
+                attackers += 1;
+                lead_z = lead_z.min(transform.translation.z);
+            }
+            Side::Defender => defenders += 1,
+        }
+    }
+    info!("battle: {attackers} attackers (lead z={lead_z:.0}), {defenders} defenders, {dead} down");
 }
 
 /// War horn at the start; victory banner when the last defender falls.
