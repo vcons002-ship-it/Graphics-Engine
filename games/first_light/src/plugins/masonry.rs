@@ -301,7 +301,7 @@ fn wake_block(
     if *body != RigidBody::Static {
         return;
     }
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         RigidBody::Dynamic,
         TransformInterpolation,
         CollisionEventsEnabled,
@@ -366,7 +366,7 @@ fn fracture(
 
     let reach = size.max_element() * 1.4 + 0.4;
     let position = transform.translation;
-    commands.entity(entity).despawn();
+    commands.entity(entity).try_despawn();
     enqueue_neighbors(queue, spatial, blocks, position, reach);
 }
 
@@ -387,10 +387,16 @@ fn apply_damage(
     let Ok((mut block, velocity)) = damageable.get_mut(entity) else {
         return false;
     };
+    // Sentinel: this block already fractured this tick (its despawn is
+    // queued); damaging it again would queue commands on a dead entity.
+    if block.integrity == f32::NEG_INFINITY {
+        return false;
+    }
     let was = block.integrity;
     block.integrity -= energy;
 
     if block.integrity <= 0.0 {
+        block.integrity = f32::NEG_INFINITY;
         if let Ok((transform, _)) = blocks.get(entity) {
             let v = velocity.map(|v| Vec3::new(v.x, v.y, v.z)).unwrap_or(Vec3::ZERO);
             let transform = *transform;
@@ -403,7 +409,7 @@ fn apply_damage(
     // Visible crack at half integrity.
     if was > block.max_integrity * 0.5 && block.integrity <= block.max_integrity * 0.5 {
         if let Ok((transform, _)) = blocks.get(entity) {
-            commands.entity(entity).insert(MeshMaterial3d(
+            commands.entity(entity).try_insert(MeshMaterial3d(
                 assets.cracked[tint_index(transform.translation, assets.cracked.len())].clone(),
             ));
         }
@@ -644,6 +650,6 @@ fn fragment_budget(
         .collect();
     candidates.sort_unstable_by_key(|(seq, _)| *seq);
     for (_, entity) in candidates.into_iter().take(count - FRAGMENT_BUDGET) {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
 }
