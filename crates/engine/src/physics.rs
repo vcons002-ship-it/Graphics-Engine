@@ -11,6 +11,9 @@ pub struct PhysicsPlugin;
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PhysicsPlugins::default());
+        app.add_plugins(PhysicsPlugins::default())
+            // 8 solver substeps: keeps tall masonry stacks and heavy
+            // projectile impacts stable (default is 6).
+            .insert_resource(SubstepCount(8));
     }
 }

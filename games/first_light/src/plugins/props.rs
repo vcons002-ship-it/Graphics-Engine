@@ -61,6 +61,9 @@ fn spawn_crate_stack(
                 Transform::from_xyz(x, y + 0.05, center_z),
                 RigidBody::Dynamic,
                 Collider::cuboid(CRATE_SIZE, CRATE_SIZE, CRATE_SIZE),
+                ColliderDensity(450.0),
+                Friction::new(0.6),
+                Restitution::new(0.1),
                 TransformInterpolation,
                 Respawnable,
             ));
@@ -141,6 +144,11 @@ fn spawn_scattered_props(
             Transform::from_translation(position),
             RigidBody::Dynamic,
             collider,
+            // Rough physical materials by kind: metal is dense and slick,
+            // the rest are mid-weight and grippy.
+            ColliderDensity(if i % 10 == 0 || i % 10 == 5 { 2700.0 } else { 800.0 }),
+            Friction::new(if i % 10 == 0 || i % 10 == 5 { 0.35 } else { 0.6 }),
+            Restitution::new(0.15),
             TransformInterpolation,
             Respawnable,
         ));
