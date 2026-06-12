@@ -5,6 +5,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use engine::prelude::*;
 
+use super::world::Respawnable;
+
 pub struct ThrowPlugin;
 
 impl Plugin for ThrowPlugin {
@@ -69,6 +71,7 @@ fn throw_cube(
         Collider::cuboid(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE),
         LinearVelocity((direction * THROW_SPEED).adjust_precision()),
         TransformInterpolation,
+        Respawnable,
         Expires(Timer::from_seconds(CUBE_LIFETIME_SECS, TimerMode::Once)),
     ));
 }

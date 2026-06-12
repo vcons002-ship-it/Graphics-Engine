@@ -3,14 +3,23 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use engine::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+use super::terrain::{PLAYGROUND_CENTER, terrain_height};
+use super::world::Respawnable;
 
 pub struct PropsPlugin;
 
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_crate_stack, spawn_scattered_props));
+        app.add_systems(Startup, (spawn_crate_stack, spawn_scattered_props))
+            .add_systems(
+                Update,
+                (spawn_crate_stack, spawn_scattered_props)
+                    .run_if(on_message::<RestartRequested>),
+            );
     }
 }
 
@@ -37,20 +46,23 @@ fn spawn_crate_stack(
         ..default()
     });
 
-    // A pyramid: rows of 5, 4, 3, 2, 1 crates, slightly separated so the
-    // solver settles them rather than spawning in contact.
+    // A pyramid on the playground pad: rows of 5, 4, 3, 2, 1 crates, slightly
+    // separated so the solver settles them rather than spawning in contact.
+    let center_z = PLAYGROUND_CENTER.y - 12.0;
+    let base_y = terrain_height(PLAYGROUND_CENTER.x, center_z);
     let gap = CRATE_SIZE + 0.02;
     for (row, width) in [5, 4, 3, 2, 1].into_iter().enumerate() {
         for i in 0..width {
             let x = (i as f32 - (width as f32 - 1.0) / 2.0) * gap;
-            let y = CRATE_SIZE / 2.0 + row as f32 * gap;
+            let y = base_y + CRATE_SIZE / 2.0 + row as f32 * gap;
             commands.spawn((
                 Mesh3d(crate_mesh.clone()),
                 MeshMaterial3d(crate_material.clone()),
-                Transform::from_xyz(x, y + 0.01, -4.0),
+                Transform::from_xyz(x, y + 0.05, center_z),
                 RigidBody::Dynamic,
                 Collider::cuboid(CRATE_SIZE, CRATE_SIZE, CRATE_SIZE),
                 TransformInterpolation,
+                Respawnable,
             ));
         }
     }
@@ -76,8 +88,10 @@ fn spawn_scattered_props(
         } else {
             r1 * std::f32::consts::TAU
         };
-        let radius = 8.0 + r2 * 18.0;
-        let position = Vec3::new(angle.cos() * radius, 3.0 + r3 * 2.0, angle.sin() * radius);
+        let radius = 7.0 + r2 * 14.0;
+        let x = PLAYGROUND_CENTER.x + angle.cos() * radius;
+        let z = PLAYGROUND_CENTER.y + angle.sin() * radius;
+        let position = Vec3::new(x, terrain_height(x, z) + 2.0 + r3 * 2.0, z);
 
         let base_color = Color::hsl(r4 * 360.0, 0.55, 0.5);
         let material = match i % 5 {
@@ -128,6 +142,7 @@ fn spawn_scattered_props(
             RigidBody::Dynamic,
             collider,
             TransformInterpolation,
+            Respawnable,
         ));
     }
 }
