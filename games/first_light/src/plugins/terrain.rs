@@ -9,9 +9,10 @@
 
 use avian3d::prelude::*;
 use bevy::asset::RenderAssetUsages;
+use bevy::image::Image;
 use bevy::mesh::{Indices, Mesh};
 use bevy::prelude::*;
-use bevy::render::render_resource::PrimitiveTopology;
+use bevy::render::render_resource::{Extent3d, PrimitiveTopology, TextureDimension, TextureFormat};
 
 pub struct TerrainPlugin;
 
@@ -198,13 +199,55 @@ fn ground_color(x: f32, z: f32, height: f32, normal: Vec3) -> [f32; 4] {
     [color.x, color.y, color.z, 1.0]
 }
 
-/// Mesh resolution (vertices per side).
+/// Mesh resolution (vertices per side) and albedo texture resolution.
 const MESH_RES: usize = 257;
+const TEXTURE_RES: usize = 1024;
+
+/// Bakes the ground-color function into a single albedo texture covering the
+/// whole terrain (~0.6 m/texel) — far more color detail than the mesh has
+/// vertices, plus extra micro-variation.
+fn bake_albedo() -> Image {
+    let mut data = Vec::with_capacity(TEXTURE_RES * TEXTURE_RES * 4);
+    let step = TERRAIN_SIZE / (TEXTURE_RES - 1) as f32;
+    let half = TERRAIN_SIZE / 2.0;
+    for j in 0..TEXTURE_RES {
+        let z = -half + j as f32 * step;
+        for i in 0..TEXTURE_RES {
+            let x = -half + i as f32 * step;
+            let h = terrain_height(x, z);
+            // Cheap slope estimate at texel scale.
+            let dx = terrain_height(x + 0.7, z) - h;
+            let dz = terrain_height(x, z + 0.7) - h;
+            let normal = Vec3::new(-dx, 0.7, -dz).normalize();
+            let c = ground_color(x, z, h, normal);
+            // Micro-variation so flat fields aren't uniform.
+            let micro = 1.0 + fbm(x * 0.9 + 5.0, z * 0.9 - 9.0, 2) * 0.10;
+            data.extend_from_slice(&[
+                ((c[0] * micro).clamp(0.0, 1.0) * 255.0) as u8,
+                ((c[1] * micro).clamp(0.0, 1.0) * 255.0) as u8,
+                ((c[2] * micro).clamp(0.0, 1.0) * 255.0) as u8,
+                255,
+            ]);
+        }
+    }
+    Image::new(
+        Extent3d {
+            width: TEXTURE_RES as u32,
+            height: TEXTURE_RES as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
+}
 
 fn spawn_terrain(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     // --- Visual mesh -------------------------------------------------------
     let n = MESH_RES;
@@ -213,7 +256,6 @@ fn spawn_terrain(
 
     let mut positions = Vec::with_capacity(n * n);
     let mut normals = Vec::with_capacity(n * n);
-    let mut colors = Vec::with_capacity(n * n);
     let mut uvs = Vec::with_capacity(n * n);
     for j in 0..n {
         for i in 0..n {
@@ -223,7 +265,6 @@ fn spawn_terrain(
             let normal = terrain_normal(x, z);
             positions.push([x, y, z]);
             normals.push([normal.x, normal.y, normal.z]);
-            colors.push(ground_color(x, z, y, normal));
             uvs.push([i as f32 / (n - 1) as f32, j as f32 / (n - 1) as f32]);
         }
     }
@@ -244,7 +285,6 @@ fn spawn_terrain(
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
     .with_inserted_indices(Indices::U32(indices));
 
@@ -257,6 +297,7 @@ fn spawn_terrain(
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
+            base_color_texture: Some(images.add(bake_albedo())),
             perceptual_roughness: 0.96,
             ..default()
         })),

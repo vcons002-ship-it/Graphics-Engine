@@ -57,6 +57,9 @@ fn course_top(height: f32) -> f32 {
 #[derive(Resource)]
 struct CastleAssets {
     cone: Handle<Mesh>,
+    sphere: Handle<Mesh>,
+    cube: Handle<Mesh>,
+    flame: Handle<StandardMaterial>,
     slate: Handle<StandardMaterial>,
     wood: Handle<StandardMaterial>,
     window: Handle<StandardMaterial>,
@@ -72,6 +75,13 @@ fn setup_castle_assets(
         cone: meshes.add(Cone {
             radius: 0.5,
             height: 1.0,
+        }),
+        sphere: meshes.add(Sphere::new(0.14)),
+        cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        flame: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.6, 0.2),
+            emissive: LinearRgba::rgb(2.2, 1.0, 0.25) * 9_000.0,
+            ..default()
         }),
         slate: materials.add(StandardMaterial {
             base_color: Color::srgb(0.18, 0.20, 0.27),
@@ -209,6 +219,18 @@ fn spawn_castle(
     // Slate spire with the banner mounted on it (children fall with it);
     // sized to rest on the wall ring.
     roof_cone(c, ma, ca, great + Vec3::Y * great_top, 2.0 * (gx + 1.2), 9.5, true);
+
+    // --- Torches: gate flanks, courtyard, keep door --------------------------
+    for pos in [
+        Vec3::new(-GATE_HALF_WIDTH - 0.8, 0.0, WALL_HALF_Z + 2.6),
+        Vec3::new(GATE_HALF_WIDTH + 0.8, 0.0, WALL_HALF_Z + 2.6),
+        Vec3::new(-3.0, 0.0, 6.5),
+        Vec3::new(3.0, 0.0, 6.5),
+        Vec3::new(-10.0, 0.0, 12.0),
+        Vec3::new(10.0, 0.0, 12.0),
+    ] {
+        torch(c, ca, o + pos);
+    }
 
     // --- Courtyard buildings ------------------------------------------------------
     courtyard_building(c, ma, ca, o + Vec3::new(-WALL_HALF_X + 6.5, 0.0, 4.0), 9.0, 7.0, 14.0, ca.slate.clone());
@@ -373,6 +395,35 @@ fn merlons(commands: &mut Commands, assets: &MasonryAssets, center: Vec3, dir: V
             Vec3::new(1.1, 1.3, 0.7),
         );
     }
+}
+
+/// A standing torch: wooden post, emissive flame, warm point light.
+fn torch(commands: &mut Commands, castle: &CastleAssets, base: Vec3) {
+    commands
+        .spawn((
+            Mesh3d(castle.cube.clone()),
+            MeshMaterial3d(castle.wood.clone()),
+            Transform::from_translation(base + Vec3::Y * 0.9).with_scale(Vec3::new(0.12, 1.8, 0.12)),
+            Respawnable,
+        ))
+        .with_children(|t| {
+            // Children of a scaled parent: counter the scale.
+            t.spawn((
+                Mesh3d(castle.sphere.clone()),
+                MeshMaterial3d(castle.flame.clone()),
+                Transform::from_xyz(0.0, 0.56, 0.0).with_scale(Vec3::new(1.0 / 0.12, 1.0 / 1.8, 1.0 / 0.12)),
+            ));
+            t.spawn((
+                PointLight {
+                    color: Color::srgb(1.0, 0.62, 0.28),
+                    intensity: 600_000.0,
+                    range: 22.0,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.6, 0.0),
+            ));
+        });
 }
 
 /// A slate roof cone: one rigid piece with a cone collider, masonry-managed

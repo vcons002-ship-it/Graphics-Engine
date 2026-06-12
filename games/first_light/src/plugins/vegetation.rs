@@ -52,7 +52,10 @@ fn spawn_vegetation(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // Shared meshes; instances vary by transform scale.
-    let trunk_mesh = meshes.add(Cylinder::new(0.22, 2.6));
+    let trunk_mesh = meshes.add(Cone {
+        radius: 0.3,
+        height: 3.2,
+    });
     let canopy_mesh = meshes.add(Cone {
         radius: 1.0,
         height: 1.0,
@@ -70,6 +73,8 @@ fn spawn_vegetation(
         Color::srgb(0.10, 0.31, 0.11),
         Color::srgb(0.06, 0.22, 0.10),
         Color::srgb(0.13, 0.34, 0.12),
+        Color::srgb(0.16, 0.33, 0.08),
+        Color::srgb(0.09, 0.28, 0.14),
     ]
     .map(|c| {
         materials.add(StandardMaterial {
@@ -93,7 +98,7 @@ fn spawn_vegetation(
     // --- Pines ---------------------------------------------------------------
     let mut planted = 0;
     for i in 0..1400u64 {
-        if planted >= 320 {
+        if planted >= 380 {
             break;
         }
         let x = (hash01((i, 1)) - 0.5) * 580.0;
@@ -107,10 +112,17 @@ fn spawn_vegetation(
         planted += 1;
 
         let s = 0.8 + hash01((i, 3)) * 1.0;
+        // A slight random lean makes the forest read as organic.
+        let lean = Quat::from_euler(
+            EulerRot::XYZ,
+            (hash01((i, 5)) - 0.5) * 0.10,
+            hash01((i, 6)) * std::f32::consts::TAU,
+            (hash01((i, 7)) - 0.5) * 0.10,
+        );
         let canopy = canopy_materials[(i % canopy_materials.len() as u64) as usize].clone();
         commands
             .spawn((
-                Transform::from_xyz(x, h, z),
+                Transform::from_xyz(x, h, z).with_rotation(lean),
                 Visibility::default(),
                 RigidBody::Static,
                 Collider::cylinder(0.3 * s, 3.0 * s),
@@ -119,7 +131,7 @@ fn spawn_vegetation(
                 tree.spawn((
                     Mesh3d(trunk_mesh.clone()),
                     MeshMaterial3d(trunk_material.clone()),
-                    Transform::from_xyz(0.0, 1.2 * s, 0.0).with_scale(Vec3::splat(s)),
+                    Transform::from_xyz(0.0, 1.6 * s, 0.0).with_scale(Vec3::splat(s)),
                 ));
                 for (layer, (radius, height, y)) in
                     [(1.6, 2.8, 2.6), (1.25, 2.4, 4.0), (0.85, 2.0, 5.2)]
