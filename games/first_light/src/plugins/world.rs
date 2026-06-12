@@ -42,6 +42,11 @@ fn setup_world(
         Collider::cuboid(GROUND_SIZE, GROUND_THICKNESS, GROUND_SIZE),
     ));
 
-    // Player spawns facing -Z, toward the crate stack and props.
-    spawn_player(&mut commands, Vec3::new(0.0, 1.5, 10.0));
+    // TEMP DIAGNOSTIC: standalone camera instead of the player hierarchy,
+    // to test whether the camera-as-child-of-kinematic-body breaks shadows.
+    // spawn_player(&mut commands, Vec3::new(0.0, 1.5, 10.0));
+    commands.spawn((
+        MainCamera,
+        Transform::from_xyz(0.0, 2.1, 10.0).looking_at(Vec3::new(0.0, 1.0, -4.0), Vec3::Y),
+    ));
 }
