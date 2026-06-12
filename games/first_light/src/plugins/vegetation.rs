@@ -40,7 +40,7 @@ fn clear_of_landmarks(x: f32, z: f32) -> bool {
     if p.distance(KNOLL_CENTER) < 38.0 {
         return false;
     }
-    if p.distance(CASTLE_CENTER) < 105.0 {
+    if p.distance(CASTLE_CENTER) < 120.0 {
         return false;
     }
     // Causeway corridor.

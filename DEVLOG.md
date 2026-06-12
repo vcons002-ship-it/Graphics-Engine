@@ -1,5 +1,29 @@
 # DEVLOG
 
+## Entry #7 — 2026-06-12 — Trebuchet, expanded fortress, heavy impacts
+
+- Roof cones no longer fracture into four giant cubes: fragments cap at
+  ~1.1 m (up to 4 splits/axis) and `ConeShape` pieces skip fragments
+  outside the cone volume.
+- **Castle expanded** with real fortress conventions: 84x68 m curtain
+  (14 m high) with battered plinths, string courses, and machicolation
+  collars baked into `wall_run`/`ring_tower`; three mural interval
+  towers; a forward barbican with flank walls astride the causeway;
+  bigger keep (24 m) and great tower (34 m); gabled great hall; well.
+  ~13.5k blocks. Terrace flat radius 66 / blend 112; causeway top at
+  z=-124; footprint tests updated.
+- **Catapult became a counterweight trebuchet**: 7.2 m pivot atop A-frame
+  trusses, 11.8 m effective arm with rigid sling extension, counterweight
+  box counter-rotated every frame so it hangs plumb, gravity-paced
+  ~0.5 s swing (accel 2+9c rad/s^2), 3 s crank, 1.8 s recrank; 0.75 m
+  granite ball (~4.6 t) at 45–72 m/s.
+- **Heavy stone-on-stone feel**: impact camera shake (energy-scaled
+  trauma joggle in the chase camera) and dust-mote bursts at the impact
+  point (no physics bodies, integrated manually, ~1.5 s life).
+- Verified: 0.55-charge shot smashed through a gatehouse tower top at
+  45 m/s (4.7 MJ, 12+7 shattered), carried on, and hit the keep at
+  5.6 MJ. Deferred still: procedural impact audio (next big feel win).
+
 ## Entry #6 — 2026-06-12 — Structural integrity overhaul (post-mortem adoption)
 
 Playtest: one hit collapsed the entire castle. Root cause was a positive

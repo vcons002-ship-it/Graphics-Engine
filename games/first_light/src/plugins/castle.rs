@@ -1,20 +1,29 @@
 //! A stone castle on the headwall terrace — built entirely from individual
 //! mortared masonry blocks (see `masonry.rs`), so every wall, tower, and
-//! merlon can be knocked down with physics.
+//! merlon can be brought down with physics.
 //!
-//! Layout: crenellated curtain wall with four round corner towers, a
-//! twin-towered gatehouse over the causeway, an inner keep with corner
-//! piers, rooftop turrets, a great tower with banner, and courtyard
-//! buildings. Roof cones are single rigid pieces that topple when the
-//! masonry under them is destroyed. Windows are wall blocks with a warm
-//! emissive material. Everything is `Respawnable`: Restart rebuilds the
-//! castle.
+//! The architecture follows real concentric-castle conventions:
+//! - curtain walls with a **battered plinth** (stepped, thicker base
+//!   courses), a protruding **string course** at two-thirds height, and a
+//!   corbelled **machicolation collar** under the wall head;
+//! - four round corner towers plus **mural (interval) towers** mid-wall;
+//! - a twin-towered **gatehouse** behind a forward **barbican** that
+//!   funnels the causeway approach;
+//! - an inner **keep** with solid corner piers and rooftop turrets, and a
+//!   taller **great tower** with the banner;
+//! - courtyard buildings: a **gabled great hall**, stables, and a well.
+//!
+//! Roof cones are single rigid pieces (marked [`ConeShape`] so they
+//! fracture into cone-shaped debris). Everything is `Respawnable`:
+//! Restart rebuilds the castle.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use std::f32::consts::TAU;
 
-use super::masonry::{self, MasonryAssets, MasonryBlock, SLATE_TOUGHNESS, WOOD_TOUGHNESS, spawn_block};
+use super::masonry::{
+    self, ConeShape, MasonryAssets, MasonryBlock, SLATE_TOUGHNESS, WOOD_TOUGHNESS, spawn_block,
+};
 use super::terrain::{CASTLE_CENTER, TERRACE_HEIGHT};
 use super::world::Respawnable;
 use engine::prelude::*;
@@ -29,20 +38,23 @@ impl Plugin for CastlePlugin {
                 .chain()
                 .after(masonry::setup_masonry_assets),
         )
-        .add_systems(
-            Update,
-            spawn_castle.run_if(on_message::<RestartRequested>),
-        );
+        .add_systems(Update, spawn_castle.run_if(on_message::<RestartRequested>));
     }
 }
 
 /// Curtain wall footprint (local space, castle centered at origin, gate
 /// facing +Z toward the valley).
-const WALL_HALF_X: f32 = 30.0;
-const WALL_HALF_Z: f32 = 24.0;
-const WALL_HEIGHT: f32 = 12.0;
-const WALL_THICKNESS: f32 = 2.0;
-const GATE_HALF_WIDTH: f32 = 4.0;
+const WALL_HALF_X: f32 = 42.0;
+const WALL_HALF_Z: f32 = 34.0;
+const WALL_HEIGHT: f32 = 14.0;
+const WALL_THICKNESS: f32 = 2.2;
+const GATE_HALF_WIDTH: f32 = 4.5;
+/// Corner tower radius and clearance the walls keep from tower centers.
+const CORNER_TOWER_R: f32 = 6.5;
+const TOWER_GAP: f32 = 7.0;
+/// Mural (interval) towers midway along the long walls.
+const MURAL_TOWER_R: f32 = 4.2;
+const MURAL_GAP: f32 = 4.8;
 
 /// Nominal masonry course dimensions.
 const BLOCK_L: f32 = 1.4;
@@ -106,139 +118,150 @@ fn setup_castle_assets(
     });
 }
 
-fn spawn_castle(
-    mut commands: Commands,
-    masonry: Res<MasonryAssets>,
-    castle: Res<CastleAssets>,
-) {
+fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res<CastleAssets>) {
     let c = &mut commands;
     let ma = &*masonry;
     let ca = &*castle;
     let o = Vec3::new(CASTLE_CENTER.x, TERRACE_HEIGHT, CASTLE_CENTER.y);
 
-    // --- Curtain walls (gate opening in the front wall) ----------------------
-    // Corner towers are r=5.5; walls stop 6.0 short of corners so block
-    // colliders never overlap the tower rings. The gate-side front segments
-    // also stop clear of the gatehouse towers.
-    let tower_gap = 6.0;
-    let gate_clear = GATE_HALF_WIDTH + 2.4 + 3.4;
-    wall_run(c, ma, o + Vec3::new(-WALL_HALF_X + tower_gap, 0.0, -WALL_HALF_Z), Vec3::X, (WALL_HALF_X - tower_gap) * 2.0, WALL_HEIGHT, WALL_THICKNESS);
-    wall_run(c, ma, o + Vec3::new(-WALL_HALF_X, 0.0, -WALL_HALF_Z + tower_gap), Vec3::Z, (WALL_HALF_Z - tower_gap) * 2.0, WALL_HEIGHT, WALL_THICKNESS);
-    wall_run(c, ma, o + Vec3::new(WALL_HALF_X, 0.0, -WALL_HALF_Z + tower_gap), Vec3::Z, (WALL_HALF_Z - tower_gap) * 2.0, WALL_HEIGHT, WALL_THICKNESS);
-    wall_run(c, ma, o + Vec3::new(-WALL_HALF_X + tower_gap, 0.0, WALL_HALF_Z), Vec3::X, WALL_HALF_X - tower_gap - gate_clear, WALL_HEIGHT, WALL_THICKNESS);
-    wall_run(c, ma, o + Vec3::new(gate_clear, 0.0, WALL_HALF_Z), Vec3::X, WALL_HALF_X - tower_gap - gate_clear, WALL_HEIGHT, WALL_THICKNESS);
-
-    // Wall-top merlons (outer edge).
-    let wall_top = course_top(WALL_HEIGHT);
-    merlons(c, ma, o + Vec3::new(0.0, wall_top, -WALL_HALF_Z - WALL_THICKNESS / 2.0 + 0.35), Vec3::X, (WALL_HALF_X - tower_gap) * 2.0 - 1.5);
+    // --- Curtain walls, split around corner and mural towers ----------------
+    // Back wall (mural tower at its center).
+    let back_len = WALL_HALF_X - TOWER_GAP - MURAL_GAP;
+    wall_run(c, ma, o + Vec3::new(-WALL_HALF_X + TOWER_GAP, 0.0, -WALL_HALF_Z), Vec3::X, back_len, WALL_HEIGHT, WALL_THICKNESS);
+    wall_run(c, ma, o + Vec3::new(MURAL_GAP, 0.0, -WALL_HALF_Z), Vec3::X, back_len, WALL_HEIGHT, WALL_THICKNESS);
+    // Side walls (mural tower at each center).
+    let side_len = WALL_HALF_Z - TOWER_GAP - MURAL_GAP;
     for sx in [-1.0_f32, 1.0] {
-        merlons(c, ma, o + Vec3::new(sx * (WALL_HALF_X + WALL_THICKNESS / 2.0 - 0.35), wall_top, 0.0), Vec3::Z, (WALL_HALF_Z - tower_gap) * 2.0 - 1.5);
-        let mid = (gate_clear + WALL_HALF_X - tower_gap) / 2.0;
-        merlons(c, ma, o + Vec3::new(sx * mid, wall_top, WALL_HALF_Z + WALL_THICKNESS / 2.0 - 0.35), Vec3::X, WALL_HALF_X - tower_gap - gate_clear - 1.5);
+        wall_run(c, ma, o + Vec3::new(sx * WALL_HALF_X, 0.0, -WALL_HALF_Z + TOWER_GAP), Vec3::Z, side_len, WALL_HEIGHT, WALL_THICKNESS);
+        wall_run(c, ma, o + Vec3::new(sx * WALL_HALF_X, 0.0, MURAL_GAP), Vec3::Z, side_len, WALL_HEIGHT, WALL_THICKNESS);
+    }
+    // Front wall segments flanking the gatehouse.
+    let gate_clear = GATE_HALF_WIDTH + 2.6 + 4.0;
+    let front_len = WALL_HALF_X - TOWER_GAP - gate_clear;
+    wall_run(c, ma, o + Vec3::new(-WALL_HALF_X + TOWER_GAP, 0.0, WALL_HALF_Z), Vec3::X, front_len, WALL_HEIGHT, WALL_THICKNESS);
+    wall_run(c, ma, o + Vec3::new(gate_clear, 0.0, WALL_HALF_Z), Vec3::X, front_len, WALL_HEIGHT, WALL_THICKNESS);
+
+    // Wall-head merlons.
+    let wall_top = course_top(WALL_HEIGHT);
+    merlons(c, ma, o + Vec3::new(-WALL_HALF_X + TOWER_GAP + back_len / 2.0, wall_top, -WALL_HALF_Z - WALL_THICKNESS / 2.0 + 0.2), Vec3::X, back_len - 1.5);
+    merlons(c, ma, o + Vec3::new(MURAL_GAP + back_len / 2.0, wall_top, -WALL_HALF_Z - WALL_THICKNESS / 2.0 + 0.2), Vec3::X, back_len - 1.5);
+    for sx in [-1.0_f32, 1.0] {
+        merlons(c, ma, o + Vec3::new(sx * (WALL_HALF_X + WALL_THICKNESS / 2.0 - 0.2), wall_top, -WALL_HALF_Z + TOWER_GAP + side_len / 2.0), Vec3::Z, side_len - 1.5);
+        merlons(c, ma, o + Vec3::new(sx * (WALL_HALF_X + WALL_THICKNESS / 2.0 - 0.2), wall_top, MURAL_GAP + side_len / 2.0), Vec3::Z, side_len - 1.5);
+        merlons(c, ma, o + Vec3::new(sx * (gate_clear + front_len / 2.0), wall_top, WALL_HALF_Z + WALL_THICKNESS / 2.0 - 0.2), Vec3::X, front_len - 1.5);
     }
 
-    // --- Corner towers + roofs ------------------------------------------------
+    // --- Corner towers --------------------------------------------------------
     for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         let base = o + Vec3::new(sx * WALL_HALF_X, 0.0, sz * WALL_HALF_Z);
-        let top = ring_tower(c, ma, base, 5.5, 20.0);
-        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (5.5 + 0.9), 9.0, false);
+        let top = ring_tower(c, ma, base, CORNER_TOWER_R, 24.0);
+        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (CORNER_TOWER_R + 0.9), 10.0, false);
+    }
+    // --- Mural towers -----------------------------------------------------------
+    for base in [
+        o + Vec3::new(0.0, 0.0, -WALL_HALF_Z),
+        o + Vec3::new(-WALL_HALF_X, 0.0, 0.0),
+        o + Vec3::new(WALL_HALF_X, 0.0, 0.0),
+    ] {
+        let top = ring_tower(c, ma, base, MURAL_TOWER_R, 18.0);
+        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (MURAL_TOWER_R + 0.9), 7.5, false);
     }
 
-    // --- Gatehouse --------------------------------------------------------------
+    // --- Gatehouse ----------------------------------------------------------------
     for sx in [-1.0_f32, 1.0] {
-        let base = o + Vec3::new(sx * (GATE_HALF_WIDTH + 2.4), 0.0, WALL_HALF_Z + 1.0);
-        let top = ring_tower(c, ma, base, 3.4, 16.0);
-        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (3.4 + 0.9), 6.5, false);
+        let base = o + Vec3::new(sx * (GATE_HALF_WIDTH + 2.6), 0.0, WALL_HALF_Z + 1.2);
+        let top = ring_tower(c, ma, base, 4.0, 20.0);
+        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (4.0 + 0.9), 7.5, false);
     }
-    // Lintel bridging the gate (3 courses; no arch physics — it will fall
-    // if the gate towers are destroyed, which is the point).
-    for row in 0..3 {
-        let y = 9.0 + (row as f32 + 0.5) * BLOCK_H;
-        let offset = if row % 2 == 0 { 0.0 } else { BLOCK_L / 2.0 };
-        let mut x = -GATE_HALF_WIDTH - 2.0 + offset;
-        while x + BLOCK_L <= GATE_HALF_WIDTH + 2.0 + 0.01 {
-            spawn_block(c, ma, o + Vec3::new(x + BLOCK_L / 2.0, y, WALL_HALF_Z), Quat::IDENTITY, Vec3::new(BLOCK_L - 0.02, BLOCK_H - 0.02, WALL_THICKNESS));
-            x += BLOCK_L;
-        }
-    }
-    // Raised wooden portcullis in the arch.
-    let portcullis = c
-        .spawn((
-            Mesh3d(ma.cube.clone()),
-            MeshMaterial3d(ca.wood.clone()),
-            Transform::from_translation(o + Vec3::new(0.0, 7.7, WALL_HALF_Z + 0.1))
-                .with_scale(Vec3::new(GATE_HALF_WIDTH * 2.0 - 0.4, 2.2, 0.3)),
-            RigidBody::Static,
-            Collider::cuboid(1.0, 1.0, 1.0),
-            ColliderDensity(600.0),
-            Friction::new(0.5),
-            Restitution::new(0.1),
-            MasonryBlock::from_volume((GATE_HALF_WIDTH * 2.0 - 0.4) * 2.2 * 0.3, WOOD_TOUGHNESS),
-            Respawnable,
-        ))
-        .id();
-    let _ = portcullis;
+    // Gate lintel (3 courses spanning the opening).
+    lintel(c, ma, o + Vec3::new(0.0, 11.2, WALL_HALF_Z), GATE_HALF_WIDTH - 0.8, WALL_THICKNESS, 3);
+    // Raised wooden portcullis.
+    wood_slab(c, ma, ca, o + Vec3::new(0.0, 9.4, WALL_HALF_Z + 0.1), Vec3::new(GATE_HALF_WIDTH * 2.0 - 0.6, 2.6, 0.3));
 
-    // --- Keep --------------------------------------------------------------------
-    let keep = o + Vec3::new(0.0, 0.0, -6.0);
-    let (kx, kz, kh) = (12.0, 10.0, 20.0);
-    let t = 1.6;
-    // Corner piers (solid columns) carry the rooftop turrets.
-    for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        pier(c, ma, keep + Vec3::new(sx * (kx - 1.3), 0.0, sz * (kz - 1.3)), 2.6, kh);
+    // --- Barbican: forward gate guarding the causeway ---------------------------
+    let barbican_z = WALL_HALF_Z + 14.0;
+    for sx in [-1.0_f32, 1.0] {
+        let base = o + Vec3::new(sx * (GATE_HALF_WIDTH + 1.4), 0.0, barbican_z);
+        let top = ring_tower(c, ma, base, 2.8, 11.0);
+        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (2.8 + 0.8), 5.0, false);
+        // Flank walls connecting back toward the gatehouse.
+        wall_run(c, ma, o + Vec3::new(sx * 6.6, 0.0, WALL_HALF_Z + 5.6), Vec3::Z, barbican_z - WALL_HALF_Z - 8.6, 7.0, 1.6);
     }
-    // Walls between piers; the front (+Z) wall gets window slots and a door.
-    wall_run(c, ma, keep + Vec3::new(-kx + 2.6, 0.0, -kz + t / 2.0), Vec3::X, kx * 2.0 - 5.2, kh, t);
-    wall_run(c, ma, keep + Vec3::new(-kx + t / 2.0, 0.0, -kz + 2.6), Vec3::Z, kz * 2.0 - 5.2, kh, t);
-    wall_run(c, ma, keep + Vec3::new(kx - t / 2.0, 0.0, -kz + 2.6), Vec3::Z, kz * 2.0 - 5.2, kh, t);
-    keep_front_wall(c, ma, ca, keep + Vec3::new(0.0, 0.0, kz - t / 2.0), kx * 2.0 - 5.2, kh, t);
-    // Keep-top merlons.
+    lintel(c, ma, o + Vec3::new(0.0, 8.0, barbican_z), GATE_HALF_WIDTH + 0.4, 2.2, 2);
+
+    // --- Keep -------------------------------------------------------------------------
+    let keep = o + Vec3::new(0.0, 0.0, -8.0);
+    let (kx, kz, kh) = (14.0, 12.0, 24.0);
+    let t = 1.8;
+    for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        pier(c, ma, keep + Vec3::new(sx * (kx - 1.5), 0.0, sz * (kz - 1.5)), 3.0, kh);
+    }
+    wall_run(c, ma, keep + Vec3::new(-kx + 3.0, 0.0, -kz + t / 2.0), Vec3::X, kx * 2.0 - 6.0, kh, t);
+    wall_run(c, ma, keep + Vec3::new(-kx + t / 2.0, 0.0, -kz + 3.0), Vec3::Z, kz * 2.0 - 6.0, kh, t);
+    wall_run(c, ma, keep + Vec3::new(kx - t / 2.0, 0.0, -kz + 3.0), Vec3::Z, kz * 2.0 - 6.0, kh, t);
+    keep_front_wall(c, ma, ca, keep + Vec3::new(0.0, 0.0, kz - t / 2.0), kx * 2.0 - 6.0, kh, t);
     let keep_top = course_top(kh);
     merlons(c, ma, keep + Vec3::new(0.0, keep_top, kz - 0.5), Vec3::X, kx * 2.0 - 3.0);
     merlons(c, ma, keep + Vec3::new(0.0, keep_top, -kz + 0.5), Vec3::X, kx * 2.0 - 3.0);
     merlons(c, ma, keep + Vec3::new(kx - 0.5, keep_top, 0.0), Vec3::Z, kz * 2.0 - 3.0);
     merlons(c, ma, keep + Vec3::new(-kx + 0.5, keep_top, 0.0), Vec3::Z, kz * 2.0 - 3.0);
-    // Rooftop turrets on the piers.
     for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        let base = keep + Vec3::new(sx * (kx - 1.3), keep_top, sz * (kz - 1.3));
-        let top = ring_tower(c, ma, base, 1.9, 11.0);
-        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (1.9 + 0.9), 4.4, false);
+        let base = keep + Vec3::new(sx * (kx - 1.5), keep_top, sz * (kz - 1.5));
+        let top = ring_tower(c, ma, base, 2.2, 12.0);
+        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (2.2 + 0.8), 5.0, false);
     }
 
-    // --- Great tower ----------------------------------------------------------------
-    let great = o + Vec3::new(0.0, 0.0, -17.0);
-    let (gx, gz, gh) = (5.0, 5.0, 26.0);
+    // --- Great tower -----------------------------------------------------------------
+    let great = o + Vec3::new(0.0, 0.0, -26.5);
+    let (gx, gz, gh) = (6.0, 6.0, 34.0);
     for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        pier(c, ma, great + Vec3::new(sx * (gx - 1.1), 0.0, sz * (gz - 1.1)), 2.2, gh);
+        pier(c, ma, great + Vec3::new(sx * (gx - 1.3), 0.0, sz * (gz - 1.3)), 2.6, gh);
     }
-    wall_run(c, ma, great + Vec3::new(-gx + 2.2, 0.0, -gz + 0.75), Vec3::X, gx * 2.0 - 4.4, gh, 1.5);
-    wall_run(c, ma, great + Vec3::new(-gx + 2.2, 0.0, gz - 0.75), Vec3::X, gx * 2.0 - 4.4, gh, 1.5);
-    wall_run(c, ma, great + Vec3::new(-gx + 0.75, 0.0, -gz + 2.2), Vec3::Z, gz * 2.0 - 4.4, gh, 1.5);
-    wall_run(c, ma, great + Vec3::new(gx - 0.75, 0.0, -gz + 2.2), Vec3::Z, gz * 2.0 - 4.4, gh, 1.5);
+    wall_run(c, ma, great + Vec3::new(-gx + 2.6, 0.0, -gz + 0.8), Vec3::X, gx * 2.0 - 5.2, gh, 1.6);
+    wall_run(c, ma, great + Vec3::new(-gx + 2.6, 0.0, gz - 0.8), Vec3::X, gx * 2.0 - 5.2, gh, 1.6);
+    wall_run(c, ma, great + Vec3::new(-gx + 0.8, 0.0, -gz + 2.6), Vec3::Z, gz * 2.0 - 5.2, gh, 1.6);
+    wall_run(c, ma, great + Vec3::new(gx - 0.8, 0.0, -gz + 2.6), Vec3::Z, gz * 2.0 - 5.2, gh, 1.6);
     let great_top = course_top(gh);
-    // Slate spire with the banner mounted on it (children fall with it);
-    // sized to rest on the wall ring.
-    roof_cone(c, ma, ca, great + Vec3::Y * great_top, 2.0 * (gx + 1.2), 9.5, true);
+    roof_cone(c, ma, ca, great + Vec3::Y * great_top, 2.0 * (gx + 1.4), 11.0, true);
 
-    // --- Torches: gate flanks, courtyard, keep door --------------------------
+    // --- Courtyard ----------------------------------------------------------------------
+    // Great hall with a gabled roof, along the west wall.
+    let hall = o + Vec3::new(-WALL_HALF_X + 9.5, 0.0, 8.0);
+    let (hx, hh, hd) = (5.5, 8.0, 19.0);
+    wall_run(c, ma, hall + Vec3::new(-hx, 0.0, -hd / 2.0 + 0.6), Vec3::X, hx * 2.0, hh, 1.2);
+    wall_run(c, ma, hall + Vec3::new(-hx, 0.0, hd / 2.0 - 0.6), Vec3::X, hx * 2.0, hh, 1.2);
+    wall_run(c, ma, hall + Vec3::new(-hx + 0.6, 0.0, -hd / 2.0 + 1.4), Vec3::Z, hd - 2.8, hh, 1.2);
+    wall_run(c, ma, hall + Vec3::new(hx - 0.6, 0.0, -hd / 2.0 + 1.4), Vec3::Z, hd - 2.8, hh, 1.2);
+    gable_roof(c, ma, ca, hall + Vec3::Y * course_top(hh), hx, hd + 1.2);
+
+    // Stables along the east wall (flat wooden roof).
+    let stables = o + Vec3::new(WALL_HALF_X - 7.0, 0.0, 14.0);
+    wall_run(c, ma, stables + Vec3::new(-3.5, 0.0, -5.5), Vec3::X, 7.0, 4.5, 1.0);
+    wall_run(c, ma, stables + Vec3::new(-3.5, 0.0, 5.5), Vec3::X, 7.0, 4.5, 1.0);
+    wall_run(c, ma, stables + Vec3::new(-3.0, 0.0, -4.8), Vec3::Z, 9.6, 4.5, 1.0);
+    wall_run(c, ma, stables + Vec3::new(3.0, 0.0, -4.8), Vec3::Z, 9.6, 4.5, 1.0);
+    wood_slab(c, ma, ca, stables + Vec3::Y * (course_top(4.5) + 0.4), Vec3::new(8.6, 0.8, 12.6));
+
+    // Courtyard well.
+    ring_tower(c, ma, o + Vec3::new(12.0, 0.0, 16.0), 1.4, 1.4);
+
+    // --- Torches: barbican, gate, courtyard, keep door ---------------------------
     for pos in [
-        Vec3::new(-GATE_HALF_WIDTH - 0.8, 0.0, WALL_HALF_Z + 2.6),
-        Vec3::new(GATE_HALF_WIDTH + 0.8, 0.0, WALL_HALF_Z + 2.6),
-        Vec3::new(-3.0, 0.0, 6.5),
-        Vec3::new(3.0, 0.0, 6.5),
-        Vec3::new(-10.0, 0.0, 12.0),
-        Vec3::new(10.0, 0.0, 12.0),
+        Vec3::new(-GATE_HALF_WIDTH - 1.0, 0.0, barbican_z + 2.0),
+        Vec3::new(GATE_HALF_WIDTH + 1.0, 0.0, barbican_z + 2.0),
+        Vec3::new(-GATE_HALF_WIDTH - 1.0, 0.0, WALL_HALF_Z + 3.0),
+        Vec3::new(GATE_HALF_WIDTH + 1.0, 0.0, WALL_HALF_Z + 3.0),
+        Vec3::new(-4.0, 0.0, 8.0),
+        Vec3::new(4.0, 0.0, 8.0),
     ] {
         torch(c, ca, o + pos);
     }
-
-    // --- Courtyard buildings ------------------------------------------------------
-    courtyard_building(c, ma, ca, o + Vec3::new(-WALL_HALF_X + 6.5, 0.0, 4.0), 9.0, 7.0, 14.0, ca.slate.clone());
-    courtyard_building(c, ma, ca, o + Vec3::new(WALL_HALF_X - 5.5, 0.0, 10.0), 6.0, 4.5, 10.0, ca.wood.clone());
 }
 
-/// A straight masonry wall: `start` is the base of one end, `dir` the unit
-/// run direction. Courses alternate by half a block like real ashlar.
+/// A straight masonry wall with real fortress detailing: a battered (stepped,
+/// thicker) plinth on the bottom three courses, a protruding string course at
+/// two-thirds height, and a corbelled machicolation collar at the head.
+/// Courses alternate by half a block like real ashlar.
 fn wall_run(
     commands: &mut Commands,
     assets: &MasonryAssets,
@@ -249,6 +272,7 @@ fn wall_run(
     thickness: f32,
 ) {
     let rows = (height / BLOCK_H).round() as usize;
+    let string_row = rows * 2 / 3;
     let yaw = if dir.x.abs() > 0.5 {
         Quat::IDENTITY
     } else {
@@ -256,6 +280,14 @@ fn wall_run(
     };
     for row in 0..rows {
         let y = (row as f32 + 0.5) * BLOCK_H;
+        let t = match row {
+            0 => thickness + 0.66,
+            1 => thickness + 0.44,
+            2 => thickness + 0.22,
+            r if r == string_row => thickness + 0.3,
+            r if r + 1 == rows => thickness + 0.55,
+            _ => thickness,
+        };
         let offset = if row % 2 == 0 { 0.0 } else { BLOCK_L / 2.0 };
         let mut s = -offset;
         while s < length - 0.05 {
@@ -269,7 +301,7 @@ fn wall_run(
                     assets,
                     center,
                     yaw,
-                    Vec3::new(w - 0.02, BLOCK_H - 0.02, thickness),
+                    Vec3::new(w - 0.02, BLOCK_H - 0.02, t),
                 );
             }
             s += BLOCK_L;
@@ -303,8 +335,8 @@ fn keep_front_wall(
                 continue;
             }
             let local_x = cs + w / 2.0 - length / 2.0;
-            // Door opening: 3.2 m wide, 5 courses tall, centered.
-            if row < 5 && local_x.abs() < 1.6 {
+            // Door opening: 3.6 m wide, 6 courses tall, centered.
+            if row < 6 && local_x.abs() < 1.8 {
                 continue;
             }
             let pos = start + Vec3::X * (cs + w / 2.0) + Vec3::Y * y;
@@ -315,12 +347,11 @@ fn keep_front_wall(
                 Quat::IDENTITY,
                 Vec3::new(w - 0.02, BLOCK_H - 0.02, thickness),
             );
-            // Window slots: two bands, every ~4.2 m.
-            let banded = (6..9).contains(&row) || (14..17).contains(&row);
-            if banded && (local_x.abs() % 4.2) < 0.7 && local_x.abs() > 1.0 {
+            let banded = (9..12).contains(&row) || (19..22).contains(&row);
+            if banded && (local_x.abs() % 4.4) < 0.7 && local_x.abs() > 1.2 {
                 commands
                     .entity(block)
-                    .insert(MeshMaterial3d(castle.window.clone()));
+                    .try_insert(MeshMaterial3d(castle.window.clone()));
             }
         }
     }
@@ -331,7 +362,6 @@ fn pier(commands: &mut Commands, assets: &MasonryAssets, base: Vec3, side: f32, 
     let rows = (height / BLOCK_H).round() as usize;
     for row in 0..rows {
         let y = (row as f32 + 0.5) * BLOCK_H;
-        // Alternate course orientation for an interlocked look.
         let yaw = if row % 2 == 0 {
             Quat::IDENTITY
         } else {
@@ -347,18 +377,31 @@ fn pier(commands: &mut Commands, assets: &MasonryAssets, base: Vec3, side: f32, 
     }
 }
 
-/// A round tower of tangent blocks; returns the actual top height (whole
-/// rows). Roofed towers have no separate battlement ring — the cone covers
-/// the wall head.
-fn ring_tower(commands: &mut Commands, assets: &MasonryAssets, base: Vec3, radius: f32, height: f32) -> f32 {
+/// A round tower of tangent blocks with a battered base and a corbelled top
+/// ring; returns the actual top height (whole rows).
+fn ring_tower(
+    commands: &mut Commands,
+    assets: &MasonryAssets,
+    base: Vec3,
+    radius: f32,
+    height: f32,
+) -> f32 {
     const ROW_H: f32 = 0.75;
     const ARC: f32 = 1.5;
     let radial = 1.4_f32.min(radius * 0.7);
     let rows = (height / ROW_H).round() as usize;
-    let r_mid = radius - radial / 2.0;
-    let n = ((TAU * r_mid) / ARC).round().max(6.0) as usize;
-    let chord = TAU * r_mid / n as f32;
     for row in 0..rows {
+        // Battered base and corbelled head.
+        let flare = match row {
+            0 => 0.45,
+            1 => 0.3,
+            2 => 0.15,
+            r if r + 1 == rows && rows > 4 => 0.35,
+            _ => 0.0,
+        };
+        let r_mid = radius - radial / 2.0 + flare;
+        let n = ((TAU * r_mid) / ARC).round().max(6.0) as usize;
+        let chord = TAU * r_mid / n as f32;
         let y = (row as f32 + 0.5) * ROW_H;
         let offset = if row % 2 == 0 { 0.0 } else { 0.5 };
         for k in 0..n {
@@ -370,14 +413,14 @@ fn ring_tower(commands: &mut Commands, assets: &MasonryAssets, base: Vec3, radiu
                 assets,
                 pos,
                 rot,
-                Vec3::new(chord - 0.04, ROW_H - 0.02, radial),
+                Vec3::new(chord - 0.04, ROW_H - 0.02, radial + flare),
             );
         }
     }
     rows as f32 * ROW_H
 }
 
-/// A row of merlons along `dir`, centered at `center` (top-of-wall height).
+/// A row of merlons (crenellation teeth) along `dir`, centered at `center`.
 fn merlons(commands: &mut Commands, assets: &MasonryAssets, center: Vec3, dir: Vec3, length: f32) {
     let yaw = if dir.x.abs() > 0.5 {
         Quat::IDENTITY
@@ -397,37 +440,94 @@ fn merlons(commands: &mut Commands, assets: &MasonryAssets, center: Vec3, dir: V
     }
 }
 
-/// A standing torch: wooden post, emissive flame, warm point light.
-fn torch(commands: &mut Commands, castle: &CastleAssets, base: Vec3) {
-    commands
-        .spawn((
-            Mesh3d(castle.cube.clone()),
-            MeshMaterial3d(castle.wood.clone()),
-            Transform::from_translation(base + Vec3::Y * 0.9).with_scale(Vec3::new(0.12, 1.8, 0.12)),
+/// Courses of stone bridging an opening (gate/barbican arch substitute).
+fn lintel(
+    commands: &mut Commands,
+    assets: &MasonryAssets,
+    center: Vec3,
+    half_span: f32,
+    thickness: f32,
+    courses: usize,
+) {
+    for row in 0..courses {
+        let y = center.y + (row as f32 + 0.5) * BLOCK_H;
+        let offset = if row % 2 == 0 { 0.0 } else { BLOCK_L / 2.0 };
+        let mut x = -half_span - 1.8 + offset;
+        while x + BLOCK_L <= half_span + 1.8 + 0.01 {
+            spawn_block(
+                commands,
+                assets,
+                Vec3::new(center.x + x + BLOCK_L / 2.0, y, center.z),
+                Quat::IDENTITY,
+                Vec3::new(BLOCK_L - 0.02, BLOCK_H - 0.02, thickness),
+            );
+            x += BLOCK_L;
+        }
+    }
+}
+
+/// A destructible wooden slab (portcullis, flat roofs).
+fn wood_slab(
+    commands: &mut Commands,
+    masonry: &MasonryAssets,
+    castle: &CastleAssets,
+    center: Vec3,
+    size: Vec3,
+) {
+    commands.spawn((
+        Mesh3d(masonry.cube.clone()),
+        MeshMaterial3d(castle.wood.clone()),
+        Transform::from_translation(center).with_scale(size),
+        RigidBody::Static,
+        Collider::cuboid(1.0, 1.0, 1.0),
+        ColliderDensity(600.0),
+        Friction::new(0.5),
+        Restitution::new(0.1),
+        MasonryBlock::from_volume(size.x * size.y * size.z, WOOD_TOUGHNESS),
+        Respawnable,
+    ));
+}
+
+/// A gabled slate roof: two tilted slabs meeting at a ridge.
+fn gable_roof(
+    commands: &mut Commands,
+    masonry: &MasonryAssets,
+    castle: &CastleAssets,
+    eaves_center: Vec3,
+    half_width: f32,
+    length: f32,
+) {
+    let pitch = 0.55_f32;
+    let slope = half_width / pitch.cos();
+    for side in [-1.0_f32, 1.0] {
+        let size = Vec3::new(slope + 0.6, 0.45, length);
+        let center = eaves_center
+            + Vec3::new(
+                side * half_width / 2.0,
+                (half_width / 2.0) * pitch.tan() + 0.2,
+                0.0,
+            );
+        commands.spawn((
+            Mesh3d(masonry.cube.clone()),
+            MeshMaterial3d(castle.slate.clone()),
+            Transform::from_translation(center)
+                .with_rotation(Quat::from_rotation_z(-side * pitch))
+                .with_scale(size),
+            RigidBody::Static,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            ColliderDensity(800.0),
+            Friction::new(0.6),
+            Restitution::new(0.05),
+            MasonryBlock::from_volume(size.x * size.y * size.z, SLATE_TOUGHNESS),
             Respawnable,
-        ))
-        .with_children(|t| {
-            // Children of a scaled parent: counter the scale.
-            t.spawn((
-                Mesh3d(castle.sphere.clone()),
-                MeshMaterial3d(castle.flame.clone()),
-                Transform::from_xyz(0.0, 0.56, 0.0).with_scale(Vec3::new(1.0 / 0.12, 1.0 / 1.8, 1.0 / 0.12)),
-            ));
-            t.spawn((
-                PointLight {
-                    color: Color::srgb(1.0, 0.62, 0.28),
-                    intensity: 600_000.0,
-                    range: 22.0,
-                    shadows_enabled: false,
-                    ..default()
-                },
-                Transform::from_xyz(0.0, 0.6, 0.0),
-            ));
-        });
+        ));
+    }
 }
 
 /// A slate roof cone: one rigid piece with a cone collider, masonry-managed
-/// so it topples when its tower is destroyed. Optionally carries the banner.
+/// (and [`ConeShape`]-marked so it fractures into cone-shaped debris).
+/// Optionally carries the banner.
+#[allow(clippy::too_many_arguments)]
 fn roof_cone(
     commands: &mut Commands,
     masonry: &MasonryAssets,
@@ -449,11 +549,10 @@ fn roof_cone(
         Friction::new(0.6),
         Restitution::new(0.05),
         MasonryBlock::from_volume(volume, SLATE_TOUGHNESS),
+        ConeShape,
         Respawnable,
     ));
     if banner {
-        // Children ride along when the roof falls. Note: scales are in the
-        // roof's (non-uniform) local space.
         roof.with_children(|r| {
             r.spawn((
                 Mesh3d(masonry.cube.clone()),
@@ -469,35 +568,31 @@ fn roof_cone(
     }
 }
 
-/// A small courtyard building: four masonry walls and a one-piece roof slab.
-fn courtyard_building(
-    commands: &mut Commands,
-    assets: &MasonryAssets,
-    castle: &CastleAssets,
-    center: Vec3,
-    half_x: f32,
-    height: f32,
-    depth: f32,
-    roof_material: Handle<StandardMaterial>,
-) {
-    let hz = depth / 2.0;
-    let t = 1.0;
-    wall_run(commands, assets, center + Vec3::new(-half_x / 2.0, 0.0, -hz + t / 2.0), Vec3::X, half_x, height, t);
-    wall_run(commands, assets, center + Vec3::new(-half_x / 2.0, 0.0, hz - t / 2.0), Vec3::X, half_x, height, t);
-    wall_run(commands, assets, center + Vec3::new(-half_x / 2.0 + t / 2.0, 0.0, -hz + t), Vec3::Z, depth - 2.0 * t, height, t);
-    wall_run(commands, assets, center + Vec3::new(half_x / 2.0 - t / 2.0, 0.0, -hz + t), Vec3::Z, depth - 2.0 * t, height, t);
-    commands.spawn((
-        Mesh3d(assets.cube.clone()),
-        MeshMaterial3d(roof_material),
-        Transform::from_translation(center + Vec3::Y * (height + 0.4))
-            .with_scale(Vec3::new(half_x + 1.0, 0.8, depth + 1.0)),
-        RigidBody::Static,
-        Collider::cuboid(1.0, 1.0, 1.0),
-        ColliderDensity(700.0),
-        Friction::new(0.6),
-        Restitution::new(0.05),
-        MasonryBlock::from_volume((half_x + 1.0) * 0.8 * (depth + 1.0), SLATE_TOUGHNESS),
-        Respawnable,
-    ));
-    let _ = castle;
+/// A standing torch: wooden post, emissive flame, warm point light.
+fn torch(commands: &mut Commands, castle: &CastleAssets, base: Vec3) {
+    commands
+        .spawn((
+            Mesh3d(castle.cube.clone()),
+            MeshMaterial3d(castle.wood.clone()),
+            Transform::from_translation(base + Vec3::Y * 0.9).with_scale(Vec3::new(0.12, 1.8, 0.12)),
+            Respawnable,
+        ))
+        .with_children(|t| {
+            t.spawn((
+                Mesh3d(castle.sphere.clone()),
+                MeshMaterial3d(castle.flame.clone()),
+                Transform::from_xyz(0.0, 0.56, 0.0)
+                    .with_scale(Vec3::new(1.0 / 0.12, 1.0 / 1.8, 1.0 / 0.12)),
+            ));
+            t.spawn((
+                PointLight {
+                    color: Color::srgb(1.0, 0.62, 0.28),
+                    intensity: 600_000.0,
+                    range: 22.0,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.6, 0.0),
+            ));
+        });
 }
