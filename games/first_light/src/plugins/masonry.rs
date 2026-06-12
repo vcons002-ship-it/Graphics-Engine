@@ -48,7 +48,14 @@ impl Plugin for MasonryPlugin {
             .add_systems(Startup, setup_masonry_assets)
             .add_systems(
                 FixedUpdate,
-                (projectile_impacts, crush_damage, support_check, fragment_budget).chain(),
+                (
+                    projectile_impacts,
+                    crush_damage,
+                    cache_pre_tick_velocities,
+                    support_check,
+                    fragment_budget,
+                )
+                    .chain(),
             );
     }
 }
@@ -85,6 +92,22 @@ pub struct Fragment(pub u64);
 /// cubes). Must also carry `CollisionEventsEnabled`.
 #[derive(Component)]
 pub struct Projectile;
+
+/// Velocity captured before the physics step. `CollisionStart` events are
+/// emitted after the solver has already absorbed the impact, so reading
+/// `LinearVelocity` in a handler gives the rebound speed — roughly an
+/// order of magnitude too little energy. Every body that can deal impact
+/// damage carries this cache.
+#[derive(Component, Default)]
+pub struct PreTickVelocity(pub Vec3);
+
+/// Runs after the damage handlers each tick: stores the current (not yet
+/// re-solved) velocity for next tick's events.
+fn cache_pre_tick_velocities(mut query: Query<(&LinearVelocity, &mut PreTickVelocity)>) {
+    for (velocity, mut cache) in &mut query {
+        cache.0 = Vec3::new(velocity.x, velocity.y, velocity.z);
+    }
+}
 
 /// Static masonry entities pending a support check.
 #[derive(Resource, Default)]
@@ -282,6 +305,7 @@ fn wake_block(
         RigidBody::Dynamic,
         TransformInterpolation,
         CollisionEventsEnabled,
+        PreTickVelocity::default(),
     ));
     let reach = transform.scale.max_element() * 1.4 + 0.4;
     enqueue_neighbors(queue, spatial, blocks, transform.translation, reach);
@@ -402,7 +426,7 @@ fn projectile_impacts(
     mut counter: ResMut<FragmentCounter>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
-    projectiles: Query<(&LinearVelocity, &ComputedMass), With<Projectile>>,
+    projectiles: Query<(&PreTickVelocity, &ComputedMass), With<Projectile>>,
     blocks: Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     mut damageable: Query<(&mut MasonryBlock, Option<&LinearVelocity>)>,
     transforms: Query<&Transform>,
@@ -425,7 +449,7 @@ fn projectile_impacts(
         let Ok((velocity, mass)) = projectiles.get(projectile) else {
             continue;
         };
-        let speed = velocity.length();
+        let speed = velocity.0.length();
         if speed < 6.0 {
             continue;
         }
@@ -490,7 +514,7 @@ fn crush_damage(
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
     projectiles: Query<(), With<Projectile>>,
-    movers: Query<(&LinearVelocity, &ComputedMass)>,
+    movers: Query<(&PreTickVelocity, &ComputedMass)>,
     blocks: Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     mut damageable: Query<(&mut MasonryBlock, Option<&LinearVelocity>)>,
 ) {
@@ -504,8 +528,8 @@ fn crush_damage(
             continue;
         }
         let (a, b) = (event.collider1, event.collider2);
-        let va = movers.get(a).map(|(v, m)| (Vec3::from(v.0), m.value())).ok();
-        let vb = movers.get(b).map(|(v, m)| (Vec3::from(v.0), m.value())).ok();
+        let va = movers.get(a).map(|(v, m)| (v.0, m.value())).ok();
+        let vb = movers.get(b).map(|(v, m)| (v.0, m.value())).ok();
 
         let relative = match (&va, &vb) {
             (Some((va, _)), Some((vb, _))) => (*va - *vb).length(),

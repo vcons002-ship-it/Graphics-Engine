@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use engine::prelude::*;
 
 use super::catapult::Manning;
-use super::masonry::Projectile;
+use super::masonry::{PreTickVelocity, Projectile};
 use super::world::Respawnable;
 
 pub struct ThrowPlugin;
@@ -79,6 +79,7 @@ fn throw_cube(
         SweptCcd::default(),
         Projectile,
         CollisionEventsEnabled,
+        PreTickVelocity(direction * THROW_SPEED),
         LinearVelocity((direction * THROW_SPEED).adjust_precision()),
         TransformInterpolation,
         Respawnable,

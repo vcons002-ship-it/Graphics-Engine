@@ -11,7 +11,7 @@ use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use super::masonry::Projectile;
+use super::masonry::{PreTickVelocity, Projectile};
 use super::terrain::terrain_height;
 use super::world::Respawnable;
 use engine::prelude::*;
@@ -393,6 +393,7 @@ fn wind_and_loose(
                             SweptCcd::default(),
                             Projectile,
                             CollisionEventsEnabled,
+                            PreTickVelocity(velocity),
                             TransformInterpolation,
                             LinearVelocity(velocity.adjust_precision()),
                         ));
