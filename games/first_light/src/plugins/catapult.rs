@@ -610,8 +610,9 @@ fn catapult_camera(
                 }
             }
         } else if let Ok(root) = catapults.get(active) {
-            // Behind and above the machine, looking down the aim line.
-            let eye = root.translation + root.rotation * Vec3::new(0.0, 7.5, 13.0);
+            // Behind, above, and a step to the side so the trajectory arc
+            // reads as a curve instead of an edge-on line.
+            let eye = root.translation + root.rotation * Vec3::new(3.5, 7.5, 13.5);
             let target = root.translation + root.rotation * Vec3::new(0.0, 3.0, -30.0);
             Some((eye, target))
         } else {
