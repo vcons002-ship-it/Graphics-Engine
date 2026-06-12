@@ -1,5 +1,48 @@
 # DEVLOG
 
+## Entry #4 — 2026-06-12 — Per-stone damage, cracking, and fracture
+
+Stones now take damage and break apart, giving destruction depth beyond
+support collapse:
+
+- `MasonryBlock` carries integrity in joules (volume × toughness; granite
+  55 kJ/m³, slate 35, wood 25). At 50% blocks visibly crack (material
+  swap to a fissured texture); at 0 they **fracture into 4–12 dynamic
+  fragments** that inherit velocity plus radial spray.
+- **Contact-brunt model**: the directly struck block takes 55% of a
+  projectile's kinetic energy (the collision event identifies it), 30%
+  radiates into the radius with falloff, 15% lost. Mid-ring stones break
+  loose (mortar failure), the edge cracks in place.
+- **Crush damage**: hard dynamic-vs-block collisions damage both sides
+  (relative KE × 0.4, split) — collapsing masonry pulverizes what it
+  lands on; chain reactions are emergent.
+- Performance bounds: fragments are terminal (never re-fracture); oldest
+  sleeping rubble recycled above 1,500 pieces; collision events only on
+  dynamic bodies; damage events capped per tick; support checks amortized.
+
+### Bugs that mattered
+
+- **`CollisionStart` arrives after the solver** — reading `LinearVelocity`
+  in a handler gives the *rebound* speed (~8× energy underestimate).
+  Damage-dealers now cache velocity each tick before the physics step
+  (`PreTickVelocity`); note the cache system must be ordered against
+  `PhysicsSystems` or the scheduler may interleave.
+- One landing fires one event per touching block — projectiles dedup per
+  tick or breach energy multiplies.
+- Bevy `Bundle` tuples cap at 15 elements; nest sub-tuples.
+- Siege geometry is real: from 200 m with a 40° launch the stone plunges
+  steeply — it crushes courtyards (and the keep) rather than breaching
+  wall faces. Wall-face breaching needs flatter, closer shots. Verified:
+  plunging hit at 20 m/s shatters its contact stone in the keep wall;
+  `FL_AUTO_FIRE=<frame>[:<charge>]` drives headless siege tests.
+
+### Open items
+
+- Catapult stones are indestructible; making them shatter on hard impacts
+  would be a nice touch.
+- A movable/redeployable catapult would enable flat-trajectory breaching
+  shots against the curtain wall face.
+
 ## Entry #3 — 2026-06-12 — Destructible castle, catapult, fidelity pass
 
 Playtest feedback fixed first: the causeway's smoothstep profile peaked at
