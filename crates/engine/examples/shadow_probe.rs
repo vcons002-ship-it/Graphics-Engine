@@ -2,6 +2,7 @@
 //! directional light, no engine plugins/atmosphere/physics. Saves
 //! `screenshots/probe.png` at frame 60 and exits.
 
+use avian3d::prelude::*;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -13,7 +14,7 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins((DefaultPlugins, PhysicsPlugins::default()))
         .add_systems(Startup, setup)
         .add_systems(Update, (late_decorate, shoot))
         .run();
@@ -30,11 +31,16 @@ fn setup(
         Mesh3d(meshes.add(Cuboid::new(400.0, 0.2, 400.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.7, 0.7, 0.7))),
         Transform::from_xyz(0.0, -0.1, 0.0),
+        RigidBody::Static,
+        Collider::cuboid(400.0, 0.2, 400.0),
     ));
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.8, 0.6, 0.4))),
-        Transform::from_xyz(0.0, 0.5, -4.0),
+        Transform::from_xyz(0.0, 0.6, -4.0),
+        RigidBody::Dynamic,
+        Collider::cuboid(1.0, 1.0, 1.0),
+        TransformInterpolation,
     ));
     commands.spawn((
         DirectionalLight {
