@@ -12,7 +12,8 @@ impl Plugin for WorldPlugin {
         // to the player's right and slightly behind: faces the player sees
         // are cross-lit and long shadows rake left across the view.
         app.insert_resource(SunSettings {
-            direction: Vec3::new(-1.0, -0.3, -0.25),
+            // TEMP DIAGNOSTIC: near-overhead sun to make cast shadows unmissable.
+            direction: Vec3::new(-0.25, -1.0, -0.25),
             ..default()
         })
         .add_systems(Startup, setup_world);
