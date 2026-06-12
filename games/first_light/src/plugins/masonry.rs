@@ -39,6 +39,7 @@ use std::collections::VecDeque;
 
 use super::audio::{SoundEvent, SoundKind};
 use super::scoring::DestructionTally;
+use super::soldiers::BlastEvent;
 use super::world::Respawnable;
 
 pub struct MasonryPlugin;
@@ -522,6 +523,7 @@ fn projectile_impacts(
     mut tally: ResMut<DestructionTally>,
     mut shake: ResMut<ImpactShake>,
     mut sounds: MessageWriter<SoundEvent>,
+    mut blasts: MessageWriter<BlastEvent>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
     cones: Query<(), With<ConeShape>>,
@@ -612,6 +614,10 @@ fn projectile_impacts(
             kind: SoundKind::StoneImpact,
             position: impact_at,
             intensity: (energy / 4.0e6).clamp(0.25, 1.0),
+        });
+        blasts.write(BlastEvent {
+            position: impact_at,
+            radius,
         });
         info!(
             "impact at {impact_at:.1}: {speed:.0} m/s, {energy:.0} J over {} blocks (r={radius:.1}), {shattered} shattered",

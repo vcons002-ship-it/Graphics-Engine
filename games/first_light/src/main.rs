@@ -29,6 +29,7 @@ fn main() {
             plugins::vegetation::VegetationPlugin,
             plugins::world::WorldPlugin,
             plugins::props::PropsPlugin,
+            plugins::soldiers::SoldiersPlugin,
             plugins::throw::ThrowPlugin,
             plugins::trebuchet::TrebuchetPlugin,
         ))
