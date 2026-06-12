@@ -42,7 +42,7 @@ fn setup(
             shadows_enabled: true,
             ..default()
         },
-        Transform::default().looking_to(Vec3::new(-0.25, -1.0, -0.25), Vec3::Y),
+        Transform::default().looking_to(Vec3::new(-1.0, -0.3, -0.25), Vec3::Y),
         CascadeShadowConfigBuilder {
             first_cascade_far_bound: 12.0,
             maximum_distance: 150.0,
