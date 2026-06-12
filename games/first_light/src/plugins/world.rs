@@ -54,12 +54,14 @@ impl Plugin for WorldPlugin {
 fn spawn_valley_fog(mut commands: Commands) {
     // A thin haze layer hugging the valley floor: catches god rays where
     // the sun cuts past the castle and the mountain shoulders.
+    // Density is per-meter optical depth: across a 500 m valley even small
+    // values add up, so keep it thin or the sky goes black.
     commands.spawn((
         FogVolume {
-            density_factor: 0.045,
+            density_factor: 0.0025,
             ..default()
         },
-        Transform::from_xyz(0.0, 28.0, -40.0).with_scale(Vec3::new(560.0, 90.0, 520.0)),
+        Transform::from_xyz(0.0, 12.0, -40.0).with_scale(Vec3::new(560.0, 36.0, 520.0)),
     ));
 }
 
