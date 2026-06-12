@@ -68,8 +68,14 @@ fn spawn_scattered_props(
         let r4 = hash01((i, 4));
 
         // Scatter in a ring around the origin, keeping the crate-stack and
-        // spawn areas clear.
-        let angle = r1 * std::f32::consts::TAU;
+        // spawn areas clear. Emissive props go on the sun-facing (+X) side so
+        // their bloom doesn't sit inside the crate stack's shadow.
+        let emissive = i % 5 == 1;
+        let angle = if emissive {
+            (r1 - 0.5) * std::f32::consts::PI
+        } else {
+            r1 * std::f32::consts::TAU
+        };
         let radius = 8.0 + r2 * 18.0;
         let position = Vec3::new(angle.cos() * radius, 3.0 + r3 * 2.0, angle.sin() * radius);
 
@@ -86,7 +92,7 @@ fn spawn_scattered_props(
             // flare whiting out the ground around it.
             1 => StandardMaterial {
                 base_color: Color::BLACK,
-                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 8_000.0,
+                emissive: LinearRgba::rgb(2.0, 1.1, 0.3) * 5_000.0,
                 ..default()
             },
             // Rough diffuse.
