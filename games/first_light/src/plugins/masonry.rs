@@ -37,6 +37,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::collections::VecDeque;
 
+use super::scoring::DestructionTally;
 use super::world::Respawnable;
 
 pub struct MasonryPlugin;
@@ -118,13 +119,46 @@ pub struct FragmentCounter {
     next_seq: u64,
 }
 
-/// Shared masonry rendering assets: one unit cube, grain textures, and
-/// parallel intact/cracked stone tints.
+/// Shared masonry rendering assets: a plain unit cube, chiseled unit-cube
+/// variants (jittered corners, flat shading) so stone reads rough-hewn,
+/// grain textures, and parallel intact/cracked stone tints.
 #[derive(Resource)]
 pub struct MasonryAssets {
     pub cube: Handle<Mesh>,
+    pub chiseled: Vec<Handle<Mesh>>,
     pub tints: Vec<Handle<StandardMaterial>>,
     pub cracked: Vec<Handle<StandardMaterial>>,
+}
+
+/// A unit cube whose corners are jittered (consistently across the faces
+/// sharing each corner) and flat-shaded: a rough-hewn stone block.
+fn chiseled_cube(seed: u32) -> Mesh {
+    fn corner_hash(seed: u32, p: Vec3, axis: u32) -> f32 {
+        let q = |v: f32| (v * 4.0).round() as i32 as u32;
+        let mut h = seed
+            .wrapping_mul(0x9E37_79B9)
+            .wrapping_add(q(p.x).wrapping_mul(0x85EB_CA6B))
+            .wrapping_add(q(p.y).wrapping_mul(0xC2B2_AE35))
+            .wrapping_add(q(p.z).wrapping_mul(0x27D4_EB2F))
+            .wrapping_add(axis.wrapping_mul(0x1656_67B1));
+        h = (h ^ (h >> 13)).wrapping_mul(0x6849_5FB7);
+        ((h >> 16) & 0xFF) as f32 / 255.0 - 0.5
+    }
+
+    let mut mesh: Mesh = Cuboid::new(1.0, 1.0, 1.0).into();
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        for p in positions.iter_mut() {
+            let v = Vec3::from_array(*p);
+            for axis in 0..3 {
+                p[axis as usize] += corner_hash(seed, v, axis) * 0.12;
+            }
+        }
+    }
+    mesh.duplicate_vertices();
+    mesh.compute_flat_normals();
+    mesh
 }
 
 /// Stone density (kg/m^3) used for all masonry.
@@ -169,6 +203,7 @@ pub fn setup_masonry_assets(
 
     commands.insert_resource(MasonryAssets {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        chiseled: (0..6).map(|seed| meshes.add(chiseled_cube(seed))).collect(),
         tints,
         cracked,
     });
@@ -249,7 +284,7 @@ pub fn spawn_block(
 ) -> Entity {
     commands
         .spawn((
-            Mesh3d(assets.cube.clone()),
+            Mesh3d(assets.chiseled[tint_index(pos + Vec3::splat(7.7), assets.chiseled.len())].clone()),
             MeshMaterial3d(assets.tints[tint_index(pos, assets.tints.len())].clone()),
             Transform::from_translation(pos)
                 .with_rotation(rotation)
@@ -291,6 +326,7 @@ fn enqueue_neighbors(
 fn wake_block(
     commands: &mut Commands,
     queue: &mut SupportQueue,
+    tally: &mut DestructionTally,
     spatial: &SpatialQuery,
     blocks: &Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     entity: Entity,
@@ -306,7 +342,14 @@ fn wake_block(
         TransformInterpolation,
         CollisionEventsEnabled,
         PreTickVelocity::default(),
+        // Aggressive sleep ("Jenga" culling): settled rubble leaves the
+        // solver quickly instead of grinding and re-triggering crush.
+        SleepThreshold {
+            linear: 0.6,
+            angular: 0.7,
+        },
     ));
+    tally.add(1);
     let reach = transform.scale.max_element() * 1.4 + 0.4;
     enqueue_neighbors(queue, spatial, blocks, transform.translation, reach);
 }
@@ -318,6 +361,7 @@ fn fracture(
     assets: &MasonryAssets,
     counter: &mut FragmentCounter,
     queue: &mut SupportQueue,
+    tally: &mut DestructionTally,
     spatial: &SpatialQuery,
     blocks: &Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     entity: Entity,
@@ -357,6 +401,10 @@ fn fracture(
                     Friction::new(0.8),
                     Restitution::new(0.05),
                     LinearVelocity((velocity + spray).into()),
+                    SleepThreshold {
+                        linear: 0.6,
+                        angular: 0.7,
+                    },
                     TransformInterpolation,
                     Respawnable,
                 ));
@@ -364,6 +412,7 @@ fn fracture(
         }
     }
 
+    tally.add(3);
     let reach = size.max_element() * 1.4 + 0.4;
     let position = transform.translation;
     commands.entity(entity).try_despawn();
@@ -378,6 +427,7 @@ fn apply_damage(
     assets: &MasonryAssets,
     counter: &mut FragmentCounter,
     queue: &mut SupportQueue,
+    tally: &mut DestructionTally,
     spatial: &SpatialQuery,
     blocks: &Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     damageable: &mut Query<(&mut MasonryBlock, Option<&LinearVelocity>)>,
@@ -401,7 +451,7 @@ fn apply_damage(
             let v = velocity.map(|v| Vec3::new(v.x, v.y, v.z)).unwrap_or(Vec3::ZERO);
             let transform = *transform;
             fracture(
-                commands, assets, counter, queue, spatial, blocks, entity, &transform, v,
+                commands, assets, counter, queue, tally, spatial, blocks, entity, &transform, v,
             );
         }
         return true;
@@ -416,7 +466,7 @@ fn apply_damage(
     }
     // Heavy single hits blow the mortar even when the stone survives.
     if energy > 0.28 * block.max_integrity {
-        wake_block(commands, queue, spatial, blocks, entity);
+        wake_block(commands, queue, tally, spatial, blocks, entity);
     }
     false
 }
@@ -430,6 +480,7 @@ fn projectile_impacts(
     mut events: MessageReader<CollisionStart>,
     mut queue: ResMut<SupportQueue>,
     mut counter: ResMut<FragmentCounter>,
+    mut tally: ResMut<DestructionTally>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
     projectiles: Query<(&PreTickVelocity, &ComputedMass), With<Projectile>>,
@@ -473,7 +524,7 @@ fn projectile_impacts(
         let mut direct_shattered = 0;
         if blocks.contains(struck)
             && apply_damage(
-                &mut commands, &assets, &mut counter, &mut queue, &spatial, &blocks,
+                &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial, &blocks,
                 &mut damageable, struck, energy * 0.55,
             )
         {
@@ -506,7 +557,7 @@ fn projectile_impacts(
             }
             let share = energy * 0.30 * weight / total_weight;
             if apply_damage(
-                &mut commands, &assets, &mut counter, &mut queue, &spatial, &blocks,
+                &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial, &blocks,
                 &mut damageable, *target, share,
             ) {
                 shattered += 1;
@@ -532,6 +583,7 @@ fn crush_damage(
     mut events: MessageReader<CollisionStart>,
     mut queue: ResMut<SupportQueue>,
     mut counter: ResMut<FragmentCounter>,
+    mut tally: ResMut<DestructionTally>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
     projectiles: Query<(), With<Projectile>>,
@@ -558,7 +610,9 @@ fn crush_damage(
             (None, Some((vb, _))) => vb.length(),
             (None, None) => continue,
         };
-        if relative < 3.0 {
+        // Damped against settling-pile feedback: only genuinely fast hits
+        // crush (a block falling ~1.5 m barely qualifies).
+        if relative < 5.0 {
             continue;
         }
         // Effective mass: the lighter participant limits transferred energy.
@@ -569,7 +623,7 @@ fn crush_damage(
             _ => continue,
         };
         let energy = 0.5 * mass * relative * relative * 0.5;
-        if energy < 2_000.0 {
+        if energy < 8_000.0 {
             continue;
         }
         handled += 1;
@@ -577,8 +631,8 @@ fn crush_damage(
         for target in [a, b] {
             if damageable.contains(target) {
                 apply_damage(
-                    &mut commands, &assets, &mut counter, &mut queue, &spatial, &blocks,
-                    &mut damageable, target, energy * 0.5,
+                    &mut commands, &assets, &mut counter, &mut queue, &mut tally, &spatial,
+                    &blocks, &mut damageable, target, energy * 0.5,
                 );
             }
         }
@@ -588,10 +642,19 @@ fn crush_damage(
 /// How many queued support checks run per physics tick.
 const CHECKS_PER_TICK: usize = 48;
 
-/// Wakes static masonry that has lost the support beneath it.
+/// Wakes static masonry that has genuinely lost its support. Three checks,
+/// cheap to expensive (the "forgiving archway" model):
+///
+/// 1. Direct bearing: anything static right under the base? Stays.
+/// 2. Arch rule: two or more adjacent static blocks? It is bridged —
+///    jagged archways survive over breaches instead of unzipping the
+///    whole castle.
+/// 3. Deep anchor: bridged blocks still need static mass somewhere within
+///    8 m below, or the whole floating chunk lets go.
 fn support_check(
     mut commands: Commands,
     mut queue: ResMut<SupportQueue>,
+    mut tally: ResMut<DestructionTally>,
     spatial: SpatialQuery,
     blocks: Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     bodies: Query<&RigidBody>,
@@ -606,7 +669,9 @@ fn support_check(
         if *body != RigidBody::Static {
             continue;
         }
+        let is_static = |e: Entity| matches!(bodies.get(e), Ok(RigidBody::Static));
 
+        // 1. Direct bearing under the base.
         let probe = Vec3::new(
             (transform.scale.x * 0.7).max(0.2),
             0.12,
@@ -622,11 +687,48 @@ fn support_check(
                 &SpatialQueryFilter::from_excluded_entities([entity]),
             )
             .iter()
-            .any(|&e| matches!(bodies.get(e), Ok(RigidBody::Static)));
-
-        if !supported {
-            wake_block(&mut commands, &mut queue, &spatial, &blocks, entity);
+            .copied()
+            .any(is_static);
+        if supported {
+            continue;
         }
+
+        // 2. Arch rule: bridged by at least two static masonry neighbors.
+        let tight = transform.scale.max_element() * 0.8 + 0.15;
+        let neighbors = spatial
+            .shape_intersections(
+                &Collider::sphere(tight),
+                transform.translation,
+                Quat::IDENTITY,
+                &SpatialQueryFilter::from_excluded_entities([entity]),
+            )
+            .iter()
+            .filter(|&&e| blocks.contains(e) && is_static(e))
+            .count();
+
+        if neighbors >= 2 {
+            // 3. Deep anchor: static mass anywhere within 8 m below?
+            let deep = Vec3::new(
+                (transform.scale.x * 0.5).max(0.2),
+                8.0,
+                (transform.scale.z * 0.5).max(0.2),
+            );
+            let anchored = spatial
+                .shape_intersections(
+                    &Collider::cuboid(deep.x, deep.y, deep.z),
+                    below + Vec3::new(0.0, -4.0, 0.0),
+                    Quat::IDENTITY,
+                    &SpatialQueryFilter::from_excluded_entities([entity]),
+                )
+                .iter()
+                .copied()
+                .any(is_static);
+            if anchored {
+                continue;
+            }
+        }
+
+        wake_block(&mut commands, &mut queue, &mut tally, &spatial, &blocks, entity);
     }
 }
 

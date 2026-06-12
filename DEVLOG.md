@@ -1,5 +1,34 @@
 # DEVLOG
 
+## Entry #6 — 2026-06-12 — Structural integrity overhaul (post-mortem adoption)
+
+Playtest: one hit collapsed the entire castle. Root cause was a positive
+feedback loop — any block without direct under-base support fell, falling
+columns crushed neighbors' support, repeat until nothing stood. The user
+shared a post-mortem from a prior engine build of this concept; adopted
+from it:
+
+- **Forgiving archways**: blocks bridged by >=2 adjacent static neighbors
+  hold, so breaches leave jagged arches instead of unzipping walls.
+- **Volumetric deep anchor**: bridged blocks also need static mass within
+  8 m below the base, or the floating chunk falls (no hovering islands).
+- **Jenga sleep culling**: debris carries SleepThreshold(0.6/0.7) and
+  drops out of the solver quickly once settled.
+- **Crush damping**: 5 m/s relative-speed gate and 8 kJ minimum, so
+  settling piles stop grinding each other into new collapses.
+- **Chiseled stones**: six corner-jittered flat-shaded cube variants
+  (rough-hewn look, still instanced).
+- **Destruction tally** (scoring.rs): one aggregated "DESTRUCTION +N"
+  banner per volley, with running total.
+
+Verified: two 3.9 MJ keep hits + long settle, panorama shows the castle
+standing with local damage only.
+
+Deferred post-mortem ideas worth revisiting: procedural audio synthesis
+(generated impact thuds), historical castle layout variants, brief
+slow-motion on big impacts, free orbit camera, strict object pooling
+(fragment budget covers the worst of it today).
+
 ## Entry #5 — 2026-06-12 — Catapult overhaul + feedback round
 
 Playtest feedback: catapult never reloaded (the swing substep loop broke
