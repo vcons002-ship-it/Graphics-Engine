@@ -436,10 +436,10 @@ fn projectile_impacts(
     // process each projectile once per tick or the energy multiplies.
     seen.clear();
     for event in events.read() {
-        let projectile = if projectiles.contains(event.collider1) {
-            event.collider1
+        let (projectile, struck) = if projectiles.contains(event.collider1) {
+            (event.collider1, event.collider2)
         } else if projectiles.contains(event.collider2) {
-            event.collider2
+            (event.collider2, event.collider1)
         } else {
             continue;
         };
@@ -450,12 +450,6 @@ fn projectile_impacts(
             continue;
         };
         let speed = velocity.0.length();
-        // TEMP DIAGNOSTIC: trace every projectile contact.
-        info!(
-            "projectile contact: cached {speed:.1} m/s at {:?}, other={:?}",
-            transforms.get(projectile).map(|t| t.translation),
-            event.collider2
-        );
         if speed < 6.0 {
             continue;
         }
@@ -466,8 +460,20 @@ fn projectile_impacts(
         let energy = 0.5 * mass.value() * speed * speed;
         let radius = ((energy / 30_000.0).cbrt() * 2.0).clamp(0.9, 5.0);
 
-        // Gather targets and falloff weights, then split ~85% of the energy
-        // between them (the rest is heat and noise).
+        // The stone actually struck one block: it bears the brunt (55%) —
+        // a tonne of granite at 20 m/s genuinely shatters its contact
+        // stone. 30% radiates into the surrounding masonry with falloff;
+        // the rest is heat and noise.
+        let mut direct_shattered = 0;
+        if blocks.contains(struck)
+            && apply_damage(
+                &mut commands, &assets, &mut counter, &mut queue, &spatial, &blocks,
+                &mut damageable, struck, energy * 0.55,
+            )
+        {
+            direct_shattered += 1;
+        }
+
         let hits: Vec<(Entity, f32)> = spatial
             .shape_intersections(
                 &Collider::sphere(radius),
@@ -487,9 +493,12 @@ fn projectile_impacts(
             continue;
         }
 
-        let mut shattered = 0;
+        let mut shattered = direct_shattered;
         for (target, weight) in &hits {
-            let share = energy * 0.85 * weight / total_weight;
+            if *target == struck {
+                continue;
+            }
+            let share = energy * 0.30 * weight / total_weight;
             if apply_damage(
                 &mut commands, &assets, &mut counter, &mut queue, &spatial, &blocks,
                 &mut damageable, *target, share,
