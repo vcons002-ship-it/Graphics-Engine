@@ -15,7 +15,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, setup)
-        .add_systems(Update, shoot)
+        .add_systems(Update, (late_decorate, shoot))
         .run();
 }
 
@@ -50,17 +50,35 @@ fn setup(
         }
         .build(),
     ));
+    // Spawn the camera bare; decorations are inserted a few frames later by
+    // `late_decorate`, mimicking the engine's CameraPlugin.
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 2.1, 10.0).looking_at(Vec3::new(0.0, 1.0, -4.0), Vec3::Y),
-        Tonemapping::TonyMcMapface,
-        Bloom::NATURAL,
-        Exposure { ev100: 13.0 },
-        Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
-        AtmosphereSettings::default(),
-        Msaa::Off,
-        Fxaa::default(),
     ));
+}
+
+fn late_decorate(
+    mut commands: Commands,
+    mut scattering_mediums: ResMut<Assets<ScatteringMedium>>,
+    cameras: Query<Entity, (With<Camera3d>, Without<Atmosphere>)>,
+    mut frame: Local<u32>,
+) {
+    *frame += 1;
+    if *frame < 5 {
+        return;
+    }
+    for entity in &cameras {
+        commands.entity(entity).insert((
+            Tonemapping::TonyMcMapface,
+            Bloom::NATURAL,
+            Exposure { ev100: 13.0 },
+            Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
+            AtmosphereSettings::default(),
+            Msaa::Off,
+            Fxaa::default(),
+        ));
+    }
 }
 
 fn shoot(mut commands: Commands, mut frame: Local<u32>, mut exit: MessageWriter<AppExit>) {
