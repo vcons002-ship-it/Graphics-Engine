@@ -8,7 +8,14 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_world);
+        // The player spawns facing -Z, so have the late-afternoon sunlight
+        // travel from behind-right of the spawn: the faces the player sees
+        // are lit and shadows stretch into view instead of away from it.
+        app.insert_resource(SunSettings {
+            direction: Vec3::new(-0.45, -0.35, -0.9),
+            ..default()
+        })
+        .add_systems(Startup, setup_world);
     }
 }
 
