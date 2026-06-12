@@ -1,5 +1,6 @@
 //! World wiring: sun, player spawn, controls help, and restart handling.
 
+use bevy::light::FogVolume;
 use bevy::prelude::*;
 use engine::prelude::*;
 
@@ -30,6 +31,8 @@ impl Plugin for WorldPlugin {
                 ("Jump", "Space"),
                 ("Sprint", "Left Shift"),
                 ("Throw cube", "Left click"),
+                ("Man catapult", "E (when near)"),
+                ("Wind / loose", "Hold / release Left click"),
                 ("Menu", "Esc"),
                 ("Screenshot", "F2"),
                 ("FPS counter", "F3"),
@@ -38,7 +41,7 @@ impl Plugin for WorldPlugin {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .to_vec(),
         ))
-        .add_systems(Startup, spawn_player_on_terrain)
+        .add_systems(Startup, (spawn_player_on_terrain, spawn_valley_fog))
         .add_systems(
             Update,
             (despawn_respawnables, spawn_player_on_terrain)
@@ -46,6 +49,20 @@ impl Plugin for WorldPlugin {
                 .run_if(on_message::<RestartRequested>),
         );
     }
+}
+
+fn spawn_valley_fog(mut commands: Commands) {
+    // A thin haze layer hugging the valley floor: catches god rays where
+    // the sun cuts past the castle and the mountain shoulders.
+    // Density is per-meter optical depth: across a 500 m valley even small
+    // values add up, so keep it thin or the sky goes black.
+    commands.spawn((
+        FogVolume {
+            density_factor: 0.0025,
+            ..default()
+        },
+        Transform::from_xyz(0.0, 12.0, -40.0).with_scale(Vec3::new(560.0, 36.0, 520.0)),
+    ));
 }
 
 fn spawn_player_on_terrain(mut commands: Commands) {

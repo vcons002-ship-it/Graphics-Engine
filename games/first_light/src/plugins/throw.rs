@@ -5,6 +5,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use engine::prelude::*;
 
+use super::catapult::Manning;
+use super::masonry::Projectile;
 use super::world::Respawnable;
 
 pub struct ThrowPlugin;
@@ -50,11 +52,13 @@ fn throw_cube(
     mut commands: Commands,
     buttons: Res<ButtonInput<MouseButton>>,
     locked: Res<CursorLocked>,
+    manning: Res<Manning>,
     assets: Res<ThrowAssets>,
     camera: Query<&GlobalTransform, With<MainCamera>>,
 ) {
-    // `is_changed` filters out the click that grabbed the cursor this frame.
-    if !locked.0 || locked.is_changed() || !buttons.just_pressed(MouseButton::Left) {
+    // `is_changed` filters out the click that grabbed the cursor this frame;
+    // while manning the catapult, left click winds it instead.
+    if !locked.0 || locked.is_changed() || manning.0.is_some() || !buttons.just_pressed(MouseButton::Left) {
         return;
     }
     let Ok(camera) = camera.single() else {
@@ -69,6 +73,12 @@ fn throw_cube(
             .with_rotation(camera.rotation()),
         RigidBody::Dynamic,
         Collider::cuboid(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE),
+        ColliderDensity(1500.0),
+        Friction::new(0.5),
+        Restitution::new(0.2),
+        SweptCcd::default(),
+        Projectile,
+        CollisionEventsEnabled,
         LinearVelocity((direction * THROW_SPEED).adjust_precision()),
         TransformInterpolation,
         Respawnable,

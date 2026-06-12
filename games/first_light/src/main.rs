@@ -22,11 +22,13 @@ fn main() {
         .add_plugins(EnginePlugins)
         .add_plugins((
             plugins::terrain::TerrainPlugin,
+            plugins::masonry::MasonryPlugin,
             plugins::castle::CastlePlugin,
             plugins::vegetation::VegetationPlugin,
             plugins::world::WorldPlugin,
             plugins::props::PropsPlugin,
             plugins::throw::ThrowPlugin,
+            plugins::catapult::CatapultPlugin,
         ))
         .run();
 }

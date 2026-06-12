@@ -8,7 +8,8 @@
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::AtmosphereEnvironmentMapLight;
+use bevy::light::{AtmosphereEnvironmentMapLight, VolumetricFog};
+use bevy::pbr::ScreenSpaceAmbientOcclusion;
 use bevy::pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -45,6 +46,14 @@ fn apply_render_defaults(
             AtmosphereSettings::default(),
             // Atmosphere drives ambient light and reflections (IBL).
             AtmosphereEnvironmentMapLight::default(),
+            // Crevice darkening on masonry, tree canopies, rubble piles.
+            ScreenSpaceAmbientOcclusion::default(),
+            // Light shafts from the sun through valley fog (games place
+            // `FogVolume`s; without one this is nearly free).
+            VolumetricFog {
+                ambient_intensity: 0.08,
+                ..default()
+            },
             Msaa::Off,
             Fxaa::default(),
         ));

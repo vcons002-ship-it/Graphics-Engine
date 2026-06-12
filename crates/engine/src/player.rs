@@ -143,7 +143,8 @@ pub struct GroundDetection {
 impl Default for GroundDetection {
     fn default() -> Self {
         Self {
-            max_angle: PI / 6.0,
+            // 40 degrees: alpine terrain needs a generous climb limit.
+            max_angle: 0.70,
             max_distance: 0.2,
             cast_shape: None,
         }
