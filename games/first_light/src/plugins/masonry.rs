@@ -409,7 +409,7 @@ fn apply_damage(
         }
     }
     // Heavy single hits blow the mortar even when the stone survives.
-    if energy > 0.35 * block.max_integrity {
+    if energy > 0.28 * block.max_integrity {
         wake_block(commands, queue, spatial, blocks, entity);
     }
     false
@@ -458,7 +458,7 @@ fn projectile_impacts(
         };
 
         let energy = 0.5 * mass.value() * speed * speed;
-        let radius = ((energy / 30_000.0).cbrt() * 2.0).clamp(0.9, 5.0);
+        let radius = ((energy / 22_000.0).cbrt() * 2.2).clamp(0.9, 7.0);
 
         // The stone actually struck one block: it bears the brunt (55%) —
         // a tonne of granite at 20 m/s genuinely shatters its contact
@@ -562,7 +562,7 @@ fn crush_damage(
             (None, Some((_, mb))) => *mb,
             _ => continue,
         };
-        let energy = 0.5 * mass * relative * relative * 0.4;
+        let energy = 0.5 * mass * relative * relative * 0.5;
         if energy < 2_000.0 {
             continue;
         }

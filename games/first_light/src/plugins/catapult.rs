@@ -14,7 +14,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::masonry::{PreTickVelocity, Projectile};
-use super::terrain::terrain_height;
+use super::terrain::{CASTLE_CENTER, terrain_height};
 use super::world::Respawnable;
 use engine::prelude::*;
 
@@ -70,10 +70,14 @@ impl Plugin for CatapultPlugin {
 pub struct Manning(pub Option<Entity>);
 
 /// While a shot is in the air the camera chases it; clicking returns to
-/// aiming (and starts the next wind).
+/// aiming (and starts the next wind). Near the castle the camera stops
+/// advancing and watches the destruction from a held position, lingering
+/// a few seconds after the stone comes to rest.
 #[derive(Resource, Default)]
 struct ShotCamera {
     following: Option<Entity>,
+    held_eye: Option<Vec3>,
+    rest_timer: f32,
 }
 
 /// Root entity (kinematic body; carries the frame colliders).
@@ -123,7 +127,7 @@ const PIVOT: Vec3 = Vec3::new(0.0, 4.6, 0.3);
 const TIP_RADIUS: f32 = 6.3;
 /// Stone seat offset above the spoon.
 const SEAT: Vec3 = Vec3::new(0.0, 0.5, TIP_RADIUS - 0.15);
-const STONE_RADIUS: f32 = 0.55;
+const STONE_RADIUS: f32 = 0.65;
 /// Granite.
 const STONE_DENSITY: f32 = 2600.0;
 /// Spring angular acceleration (rad/s^2) by charge: ~43–81 m/s at the tip,
@@ -387,6 +391,8 @@ fn wind_and_loose(
         let watching = manned && shot_camera.following.is_some();
         if watching && buttons.just_pressed(MouseButton::Left) {
             shot_camera.following = None;
+            shot_camera.held_eye = None;
+            shot_camera.rest_timer = 0.0;
         }
 
         match catapult.phase {
@@ -441,6 +447,8 @@ fn wind_and_loose(
                             ));
                             if manned {
                                 shot_camera.following = Some(stone_entity);
+                                shot_camera.held_eye = None;
+                                shot_camera.rest_timer = 0.0;
                             }
                             info!("catapult: loosed stone at {:.1} m/s", velocity.length());
                         }
@@ -535,22 +543,42 @@ fn catapult_camera(
         if let Some(stone) = shot_camera.following {
             match stones.get(stone) {
                 Ok((stone_transform, velocity)) => {
-                    // Stop following once the stone has effectively stopped.
+                    let stone_pos = stone_transform.translation;
+                    // Linger after the stone stops so the collapse plays out.
                     let speed = velocity.map(|v| v.length()).unwrap_or(0.0);
                     if speed < 1.5 {
-                        shot_camera.following = None;
+                        shot_camera.rest_timer += time.delta_secs();
+                        if shot_camera.rest_timer > 4.0 {
+                            shot_camera.following = None;
+                            shot_camera.held_eye = None;
+                            shot_camera.rest_timer = 0.0;
+                        }
+                    } else {
+                        shot_camera.rest_timer = 0.0;
                     }
-                    let back = velocity
-                        .map(|v| Vec3::new(v.x, 0.0, v.z).normalize_or_zero())
-                        .unwrap_or(Vec3::Z)
-                        * -14.0;
-                    Some((
-                        stone_transform.translation + back + Vec3::Y * 6.0,
-                        stone_transform.translation,
-                    ))
+
+                    // Hold position approaching the castle: watch the hit
+                    // from outside instead of riding into the wall.
+                    let near_castle = Vec2::new(stone_pos.x, stone_pos.z)
+                        .distance(CASTLE_CENTER)
+                        < 85.0;
+                    let chase_eye = stone_pos
+                        + velocity
+                            .map(|v| Vec3::new(v.x, 0.0, v.z).normalize_or_zero())
+                            .unwrap_or(Vec3::Z)
+                            * -14.0
+                        + Vec3::Y * 6.0;
+                    let eye = if near_castle {
+                        *shot_camera.held_eye.get_or_insert(chase_eye)
+                    } else {
+                        shot_camera.held_eye = None;
+                        chase_eye
+                    };
+                    Some((eye, stone_pos))
                 }
                 Err(_) => {
                     shot_camera.following = None;
+                    shot_camera.held_eye = None;
                     None
                 }
             }
