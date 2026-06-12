@@ -94,11 +94,11 @@ pub fn defender_posts() -> Vec<(Vec3, bool)> {
             posts.push((o + p + Vec3::Y * wall_top, false));
         }
     };
-    wall_line(Vec3::new(-WALL_HALF_X + 8.0, 0.0, -WALL_HALF_Z), Vec3::new(WALL_HALF_X - 8.0, 0.0, -WALL_HALF_Z), 6.0);
-    wall_line(Vec3::new(-WALL_HALF_X, 0.0, -WALL_HALF_Z + 8.0), Vec3::new(-WALL_HALF_X, 0.0, WALL_HALF_Z - 8.0), 6.0);
-    wall_line(Vec3::new(WALL_HALF_X, 0.0, -WALL_HALF_Z + 8.0), Vec3::new(WALL_HALF_X, 0.0, WALL_HALF_Z - 8.0), 6.0);
-    wall_line(Vec3::new(-WALL_HALF_X + 8.0, 0.0, WALL_HALF_Z), Vec3::new(-12.0, 0.0, WALL_HALF_Z), 5.0);
-    wall_line(Vec3::new(12.0, 0.0, WALL_HALF_Z), Vec3::new(WALL_HALF_X - 8.0, 0.0, WALL_HALF_Z), 5.0);
+    wall_line(Vec3::new(-WALL_HALF_X + 8.0, 0.0, -WALL_HALF_Z), Vec3::new(WALL_HALF_X - 8.0, 0.0, -WALL_HALF_Z), 3.2);
+    wall_line(Vec3::new(-WALL_HALF_X, 0.0, -WALL_HALF_Z + 8.0), Vec3::new(-WALL_HALF_X, 0.0, WALL_HALF_Z - 8.0), 3.2);
+    wall_line(Vec3::new(WALL_HALF_X, 0.0, -WALL_HALF_Z + 8.0), Vec3::new(WALL_HALF_X, 0.0, WALL_HALF_Z - 8.0), 3.2);
+    wall_line(Vec3::new(-WALL_HALF_X + 8.0, 0.0, WALL_HALF_Z), Vec3::new(-12.0, 0.0, WALL_HALF_Z), 2.6);
+    wall_line(Vec3::new(12.0, 0.0, WALL_HALF_Z), Vec3::new(WALL_HALF_X - 8.0, 0.0, WALL_HALF_Z), 2.6);
 
     // Archers on the tower tops.
     for (pos, r, h) in [
@@ -115,13 +115,15 @@ pub fn defender_posts() -> Vec<(Vec3, bool)> {
         let top = ring_top(h);
         posts.push((o + pos + Vec3::new(r * 0.3, top, 0.0), true));
         posts.push((o + pos + Vec3::new(-r * 0.3, top, -r * 0.2), true));
+        posts.push((o + pos + Vec3::new(0.0, top, r * 0.25), true));
+        posts.push((o + pos + Vec3::new(-r * 0.2, top, r * 0.15), true));
     }
 
     // Courtyard reserves in loose ranks before the keep.
-    for row in 0..4 {
-        for col in 0..8 {
+    for row in 0..6 {
+        for col in 0..12 {
             posts.push((
-                o + Vec3::new((col as f32 - 3.5) * 3.0, 0.0, 16.0 + row as f32 * 2.6),
+                o + Vec3::new((col as f32 - 5.5) * 2.6, 0.0, 14.0 + row as f32 * 2.4),
                 false,
             ));
         }

@@ -29,10 +29,12 @@ impl Plugin for SoldiersPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<BlastEvent>()
             .init_resource::<Battle>()
+            .init_resource::<BattleGrid>()
             .add_systems(Startup, (setup_soldier_assets, spawn_armies).chain())
             .add_systems(
                 Update,
                 (
+                    rebuild_grid,
                     soldier_ai,
                     arrows,
                     blast_kills,
@@ -103,6 +105,60 @@ struct Arrow {
 struct Battle {
     horn_blown: bool,
     victory_announced: bool,
+}
+
+/// Uniform spatial grid over the live soldiers, rebuilt every frame.
+/// Everything that needs neighbors (melee, separation, arrow hits) asks
+/// the grid instead of scanning all ~1,500 soldiers.
+#[derive(Resource, Default)]
+struct BattleGrid {
+    cells: bevy::platform::collections::HashMap<IVec2, Vec<(Entity, Vec3, Side)>>,
+}
+
+const GRID_CELL: f32 = 6.0;
+
+impl BattleGrid {
+    fn key(p: Vec3) -> IVec2 {
+        IVec2::new((p.x / GRID_CELL).floor() as i32, (p.z / GRID_CELL).floor() as i32)
+    }
+
+    fn rebuild(&mut self, soldiers: impl Iterator<Item = (Entity, Vec3, Side)>) {
+        self.cells.clear();
+        for (entity, pos, side) in soldiers {
+            self.cells.entry(Self::key(pos)).or_default().push((entity, pos, side));
+        }
+    }
+
+    /// Visits every live soldier within `radius` of `from`.
+    fn near(&self, from: Vec3, radius: f32, mut f: impl FnMut(Entity, Vec3, Side)) {
+        let r = (radius / GRID_CELL).ceil() as i32;
+        let center = Self::key(from);
+        let r_sq = radius * radius;
+        for dx in -r..=r {
+            for dz in -r..=r {
+                if let Some(cell) = self.cells.get(&(center + IVec2::new(dx, dz))) {
+                    for &(entity, pos, side) in cell {
+                        if from.distance_squared(pos) <= r_sq {
+                            f(entity, pos, side);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn nearest_enemy(&self, from: Vec3, side: Side, radius: f32) -> Option<(Entity, Vec3, f32)> {
+        let mut best: Option<(Entity, Vec3, f32)> = None;
+        self.near(from, radius, |entity, pos, other_side| {
+            if other_side != side {
+                let d = from.distance_squared(pos);
+                if best.is_none_or(|(_, _, b)| d < b) {
+                    best = Some((entity, pos, d));
+                }
+            }
+        });
+        best
+    }
 }
 
 #[derive(Component)]
@@ -265,26 +321,32 @@ fn spawn_soldier(
 }
 
 fn spawn_armies(mut commands: Commands, assets: Res<SoldierAssets>) {
-    // Defenders at their computed stations (every fourth is an archer even
+    // Defenders at their computed stations (every third is an archer even
     // off the towers).
     for (k, (post, tower_archer)) in castle::defender_posts().into_iter().enumerate() {
-        let archer = tower_archer || k % 4 == 0;
+        let archer = tower_archer || k % 3 == 0;
         spawn_soldier(&mut commands, &assets, post, Side::Defender, archer, post, k as u64);
     }
 
-    // Attackers staged in loose companies on the meadow south of the
-    // causeway; 20% carry bows.
+    // A host: twelve companies of 81 staged in waves across the meadow;
+    // 20% carry bows. Later waves start farther back and march in behind
+    // the van.
     let mut n = 0u64;
-    for company in 0..4 {
-        for rank in 0..7 {
-            for file in 0..7 {
+    for company in 0..12u32 {
+        let wave = company / 4;
+        let cx = ((company % 4) as f32 - 1.5) * 22.0;
+        let cz = -16.0 - wave as f32 * 22.0;
+        for rank in 0..9 {
+            for file in 0..9 {
                 n += 1;
-                let x = (company as f32 - 1.5) * 16.0 + (file as f32 - 3.0) * 1.8
-                    + (hash01(n) - 0.5) * 1.2;
-                let z = -34.0 + rank as f32 * 2.0 + (hash01(n + 999) - 0.5) * 1.2
-                    + company as f32 * 4.0;
+                let x = cx + (file as f32 - 4.0) * 1.9 + (hash01(n) - 0.5) * 1.2;
+                let z = cz + rank as f32 * 1.9 + (hash01(n + 999) - 0.5) * 1.2;
                 let position = Vec3::new(x, terrain_height(x, z) + 0.85, z);
-                let lateral = Vec3::new((hash01(n + 5) - 0.5) * 10.0, 0.0, (hash01(n + 11) - 0.5) * 4.0);
+                let lateral = Vec3::new(
+                    (hash01(n + 5) - 0.5) * 12.0,
+                    0.0,
+                    (hash01(n + 11) - 0.5) * 6.0,
+                );
                 spawn_soldier(
                     &mut commands,
                     &assets,
@@ -301,6 +363,15 @@ fn spawn_armies(mut commands: Commands, assets: Res<SoldierAssets>) {
 
 fn reset_battle(mut battle: ResMut<Battle>) {
     *battle = Battle::default();
+}
+
+fn rebuild_grid(mut grid: ResMut<BattleGrid>, soldiers: Query<(Entity, &Soldier, &Transform)>) {
+    grid.rebuild(
+        soldiers
+            .iter()
+            .filter(|(_, s, _)| !matches!(s.state, State::Dead { .. }))
+            .map(|(e, s, t)| (e, t.translation, s.side)),
+    );
 }
 
 /// Squared-distance helper over a soldier snapshot.
@@ -331,21 +402,28 @@ fn soldier_ai(
     mut commands: Commands,
     time: Res<Time>,
     spatial: SpatialQuery,
+    grid: Res<BattleGrid>,
     assets: Res<SoldierAssets>,
     mut sounds: MessageWriter<SoundEvent>,
     mut soldiers: Query<(Entity, &mut Soldier, &mut Transform)>,
     bodies: Query<&RigidBody>,
     masonry: Query<(), With<MasonryBlock>>,
     mut kill_list: Local<Vec<Entity>>,
+    mut frame: Local<u32>,
 ) {
     let dt = time.delta_secs();
     let route = waypoints();
+    *frame = frame.wrapping_add(1);
 
-    // Alive snapshot for targeting (cheap: ~350 entries).
+    // Strided snapshot for long-range targeting: a quarter of the live
+    // soldiers is plenty to pick an archery target from.
     let snapshot: Vec<(Entity, Vec3, Side)> = soldiers
         .iter()
         .filter(|(_, s, _)| !matches!(s.state, State::Dead { .. }))
         .map(|(e, s, t)| (e, t.translation, s.side))
+        .enumerate()
+        .filter(|(k, _)| k % 4 == 0)
+        .map(|(_, v)| v)
         .collect();
 
     // Is the gate passage still blocked by masonry?
@@ -389,7 +467,7 @@ fn soldier_ai(
                 let distance = to.length();
 
                 // Engage anything close.
-                if nearest_enemy(&snapshot, transform.translation, side, 2.4).is_some() {
+                if grid.nearest_enemy(transform.translation, side, 2.4).is_some() {
                     soldier.state = State::Fighting;
                 } else if distance < 3.0 {
                     let next = waypoint + 1;
@@ -402,7 +480,20 @@ fn soldier_ai(
                         soldier.state = State::Fighting;
                     }
                 } else {
-                    let step = to.normalize_or_zero() * WALK_SPEED * dt;
+                    // Separation: ease away from packed neighbors so the
+                    // column doesn't collapse into a blob.
+                    let mut push = Vec3::ZERO;
+                    let here = transform.translation;
+                    grid.near(here, 1.3, |other, pos, _| {
+                        if other != entity {
+                            let away = here - pos;
+                            push += Vec3::new(away.x, 0.0, away.z).normalize_or_zero();
+                        }
+                    });
+                    let step = (to.normalize_or_zero() + push.clamp_length_max(1.2) * 0.6)
+                        .normalize_or_zero()
+                        * WALK_SPEED
+                        * dt;
                     transform.translation += step;
                     transform.translation.y = terrain_height(
                         transform.translation.x,
@@ -429,6 +520,11 @@ fn soldier_ai(
             State::Holding => {
                 // Snap to post (defenders stand on masonry, not terrain).
                 transform.translation = soldier.post;
+                // Stagger the long-range scan: each defender re-targets a
+                // few times a second, offset by its seed.
+                if (frame.wrapping_add((soldier.seed * 64.0) as u32)) % 6 != 0 {
+                    continue;
+                }
                 if let Some((_, target_pos, d)) =
                     nearest_enemy(&snapshot, transform.translation, side, 95.0)
                 {
@@ -443,7 +539,7 @@ fn soldier_ai(
                 }
             }
             State::Fighting => {
-                match nearest_enemy(&snapshot, transform.translation, side, 2.6) {
+                match grid.nearest_enemy(transform.translation, side, 2.6) {
                     Some((enemy, enemy_pos, _)) => {
                         let to = enemy_pos - transform.translation;
                         transform.rotation = Quat::from_rotation_y((-to.x).atan2(-to.z));
@@ -511,8 +607,9 @@ fn loose_arrow(
 fn arrows(
     mut commands: Commands,
     time: Res<Time>,
+    grid: Res<BattleGrid>,
     mut arrows: Query<(Entity, &mut Arrow, &mut Transform), Without<Soldier>>,
-    mut soldiers: Query<(&mut Soldier, &Transform)>,
+    mut soldiers: Query<&mut Soldier>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut arrow, mut transform) in &mut arrows {
@@ -522,7 +619,7 @@ fn arrows(
         transform.translation += velocity * dt;
         if velocity.length_squared() > 0.1 {
             let dir = velocity.normalize();
-            transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, dir) ;
+            transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, dir);
         }
         let pos = transform.translation;
         let grounded = pos.y < terrain_height(pos.x, pos.z);
@@ -530,19 +627,22 @@ fn arrows(
             commands.entity(entity).despawn();
             continue;
         }
-        // Hit check against enemy soldiers.
-        for (mut soldier, soldier_transform) in &mut soldiers {
-            if soldier.side == arrow.from || matches!(soldier.state, State::Dead { .. }) {
-                continue;
+        // Hit check against nearby enemies only (grid lookup).
+        let mut hit: Option<Entity> = None;
+        grid.near(pos, 0.95, |candidate, _, side| {
+            if hit.is_none() && side != arrow.from {
+                hit = Some(candidate);
             }
-            if soldier_transform.translation.distance_squared(pos) < 0.8 {
-                soldier.state = State::Dead {
-                    timer: 0.0,
-                    ragdoll: false,
-                };
-                commands.entity(entity).despawn();
-                break;
-            }
+        });
+        if let Some(candidate) = hit
+            && let Ok(mut soldier) = soldiers.get_mut(candidate)
+            && !matches!(soldier.state, State::Dead { .. })
+        {
+            soldier.state = State::Dead {
+                timer: 0.0,
+                ragdoll: false,
+            };
+            commands.entity(entity).despawn();
         }
     }
 }
