@@ -406,7 +406,11 @@ fn projectile_impacts(
     blocks: Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     mut damageable: Query<(&mut MasonryBlock, Option<&LinearVelocity>)>,
     transforms: Query<&Transform>,
+    mut seen: Local<bevy::platform::collections::HashSet<Entity>>,
 ) {
+    // One projectile touching several blocks fires one event per pair;
+    // process each projectile once per tick or the energy multiplies.
+    seen.clear();
     for event in events.read() {
         let projectile = if projectiles.contains(event.collider1) {
             event.collider1
@@ -415,11 +419,14 @@ fn projectile_impacts(
         } else {
             continue;
         };
+        if !seen.insert(projectile) {
+            continue;
+        }
         let Ok((velocity, mass)) = projectiles.get(projectile) else {
             continue;
         };
         let speed = velocity.length();
-        if speed < 4.0 {
+        if speed < 6.0 {
             continue;
         }
         let Ok(impact_at) = transforms.get(projectile).map(|t| t.translation) else {
