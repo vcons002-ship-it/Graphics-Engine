@@ -5,11 +5,11 @@ rem
 rem  Runs the release build; cargo rebuilds only if sources
 rem  changed. Optional arguments (from a terminal):
 rem      firstlight_start.bat dev   - fast-iteration dev build
-rem      firstlight_start.bat fps   - release + F3 FPS overlay
 rem
 rem  In game: click to grab the cursor, WASD + mouse to move,
-rem  Space jump, Shift sprint, left-click throw, Esc release
-rem  cursor, F2 screenshot, F4 vsync toggle.
+rem  Space jump, Shift sprint, left-click throw, Esc pause menu
+rem  (controls, settings, restart, exit), F2 screenshot, F3 FPS
+rem  counter, F4 vsync toggle.
 rem ============================================================
 setlocal
 cd /d "%~dp0"
@@ -26,8 +26,6 @@ if errorlevel 1 (
 
 if /i "%~1"=="dev" (
     cargo run -p first_light --features dev
-) else if /i "%~1"=="fps" (
-    cargo run --release -p first_light --features dev_tools
 ) else (
     cargo run --release -p first_light
 )

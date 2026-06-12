@@ -72,17 +72,23 @@ impl Plugin for MenuPlugin {
                 refresh_setting_labels.run_if(in_state(MenuState::Settings)),
             );
 
-        if let Some(at_frame) = std::env::var("ENGINE_AUTO_MENU")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-        {
-            app.add_systems(Update, move |mut frame: Local<u32>,
-                                          mut next: ResMut<NextState<MenuState>>| {
-                *frame += 1;
-                if *frame == at_frame {
-                    next.set(MenuState::Main);
-                }
-            });
+        // `ENGINE_AUTO_MENU=<frame>` or `<frame>:<main|controls|settings>`.
+        if let Ok(var) = std::env::var("ENGINE_AUTO_MENU") {
+            let (frame_str, screen) = var.split_once(':').unwrap_or((var.as_str(), "main"));
+            let target = match screen {
+                "controls" => MenuState::Controls,
+                "settings" => MenuState::Settings,
+                _ => MenuState::Main,
+            };
+            if let Ok(at_frame) = frame_str.parse::<u32>() {
+                app.add_systems(Update, move |mut frame: Local<u32>,
+                                              mut next: ResMut<NextState<MenuState>>| {
+                    *frame += 1;
+                    if *frame == at_frame {
+                        next.set(target);
+                    }
+                });
+            }
         }
     }
 }
