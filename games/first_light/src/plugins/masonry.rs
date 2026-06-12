@@ -229,13 +229,20 @@ fn impact_wake(
         let energy = 0.5 * mass.value() * speed * speed;
         let radius = ((energy / 30_000.0).cbrt() * 2.0).clamp(0.9, 5.0);
 
+        let mut woken = 0;
         for entity in spatial.shape_intersections(
             &Collider::sphere(radius),
             impact_at,
             Quat::IDENTITY,
             &SpatialQueryFilter::default(),
         ) {
+            if matches!(statics.get(entity), Ok((_, RigidBody::Static))) {
+                woken += 1;
+            }
             wake_block(&mut commands, &mut queue, &spatial, &statics, entity);
+        }
+        if woken > 0 {
+            info!("impact at {impact_at:.1}: {speed:.0} m/s, breach r={radius:.1}, woke {woken} blocks");
         }
     }
 }

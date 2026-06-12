@@ -354,10 +354,21 @@ fn wind_and_loose(
             }
             Phase::Swinging => {
                 // Constant torque from the spring: ~snappy 0.2 s swing.
-                let acceleration = 22.0 + 40.0 * catapult.charge;
-                catapult.angular_velocity -= acceleration * dt;
-                let previous = catapult.angle;
-                catapult.angle += catapult.angular_velocity * dt;
+                // Integrated in small substeps so the release speed is
+                // frame-rate independent (one big Update step would blow
+                // far past the release angle).
+                let acceleration = 18.0 + 34.0 * catapult.charge;
+                let substeps = (dt / 0.004).ceil().max(1.0) as u32;
+                let sub_dt = dt / substeps as f32;
+                let mut previous = catapult.angle;
+                for _ in 0..substeps {
+                    if catapult.angle <= ARM_RELEASE {
+                        break;
+                    }
+                    catapult.angular_velocity -= acceleration * sub_dt;
+                    previous = catapult.angle;
+                    catapult.angle += catapult.angular_velocity * sub_dt;
+                }
 
                 // Stone releases the moment the arm passes ARM_RELEASE.
                 if previous > ARM_RELEASE && catapult.angle <= ARM_RELEASE {
@@ -370,6 +381,7 @@ fn wind_and_loose(
                         let a = ARM_RELEASE;
                         let local = Vec3::new(0.0, a.cos(), a.sin()) * speed;
                         let velocity = root.rotation * local;
+                        info!("catapult: loosed stone at {:.1} m/s", velocity.length());
                         commands.entity(stone_entity).remove::<SeatedStone>().insert((
                             RigidBody::Dynamic,
                             Collider::sphere(STONE_RADIUS),

@@ -6,7 +6,7 @@
 //! disabled because the camera's `AtmosphereEnvironmentMapLight` provides
 //! physically based ambient instead.
 
-use bevy::light::{CascadeShadowConfigBuilder, light_consts::lux};
+use bevy::light::{CascadeShadowConfigBuilder, VolumetricLight, light_consts::lux};
 use bevy::prelude::*;
 
 /// Sun configuration, applied once at startup.
@@ -54,9 +54,14 @@ fn spawn_sun(mut commands: Commands, settings: Res<SunSettings>) {
         Sun,
         DirectionalLight {
             illuminance: settings.illuminance,
+            // Warm late-day tint; the atmosphere reddens it further at
+            // grazing angles.
+            color: Color::srgb(1.0, 0.95, 0.88),
             shadows_enabled: true,
             ..default()
         },
+        // Lets fog volumes produce god rays from this light.
+        VolumetricLight,
         Transform::default().looking_to(settings.direction.normalize(), Vec3::Y),
         CascadeShadowConfigBuilder {
             first_cascade_far_bound: settings.first_cascade_far_bound,
