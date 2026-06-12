@@ -182,6 +182,13 @@ fn ground_color(x: f32, z: f32, height: f32, normal: Vec3) -> [f32; 4] {
         * (1.0 - smoothstep(0.18, 0.4, slope));
     color = color.lerp(sand, sandiness);
 
+    // Cobbled causeway up to the castle gate.
+    let cobble = Vec3::new(0.42 + tint * 0.05, 0.40 + tint * 0.04, 0.37 + tint * 0.04);
+    let on_road = (1.0 - smoothstep(6.5, 10.0, x.abs()))
+        * smoothstep(-50.0, -65.0, z)
+        * (1.0 - smoothstep(-178.0, -188.0, z));
+    color = color.lerp(cobble, on_road);
+
     [color.x, color.y, color.z, 1.0]
 }
 
@@ -240,7 +247,6 @@ fn spawn_terrain(
     // but produced no contacts at all under avian 0.6.1 — see DEVLOG.) ------
     let collider = Collider::trimesh_from_mesh(&mesh).expect("terrain mesh is a valid trimesh");
 
-    info!("terrain: {} vertices, trimesh collider", MESH_RES * MESH_RES);
     commands.spawn((
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {

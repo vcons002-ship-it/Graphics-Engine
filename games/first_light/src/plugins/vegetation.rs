@@ -142,7 +142,6 @@ fn spawn_vegetation(
             });
     }
 
-    info!("vegetation: {planted} pines");
     // --- Boulders --------------------------------------------------------------
     let mut placed = 0;
     for i in 0..900u64 {
