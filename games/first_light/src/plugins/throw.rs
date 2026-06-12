@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use engine::prelude::*;
 
 use super::catapult::Manning;
-use super::masonry::Projectile;
+use super::masonry::{PreTickVelocity, Projectile};
 use super::world::Respawnable;
 
 pub struct ThrowPlugin;
@@ -71,14 +71,17 @@ fn throw_cube(
         MeshMaterial3d(assets.material.clone()),
         Transform::from_translation(camera.translation() + direction * 0.8)
             .with_rotation(camera.rotation()),
-        RigidBody::Dynamic,
-        Collider::cuboid(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE),
-        ColliderDensity(1500.0),
-        Friction::new(0.5),
-        Restitution::new(0.2),
-        SweptCcd::default(),
+        (
+            RigidBody::Dynamic,
+            Collider::cuboid(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE),
+            ColliderDensity(1500.0),
+            Friction::new(0.5),
+            Restitution::new(0.2),
+            SweptCcd::default(),
+        ),
         Projectile,
         CollisionEventsEnabled,
+        PreTickVelocity(direction * THROW_SPEED),
         LinearVelocity((direction * THROW_SPEED).adjust_precision()),
         TransformInterpolation,
         Respawnable,

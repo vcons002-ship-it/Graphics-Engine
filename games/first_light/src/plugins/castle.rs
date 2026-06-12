@@ -14,7 +14,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use std::f32::consts::TAU;
 
-use super::masonry::{self, MasonryAssets, MasonryBlock, spawn_block};
+use super::masonry::{self, MasonryAssets, MasonryBlock, SLATE_TOUGHNESS, WOOD_TOUGHNESS, spawn_block};
 use super::terrain::{CASTLE_CENTER, TERRACE_HEIGHT};
 use super::world::Respawnable;
 use engine::prelude::*;
@@ -173,7 +173,7 @@ fn spawn_castle(
             ColliderDensity(600.0),
             Friction::new(0.5),
             Restitution::new(0.1),
-            MasonryBlock,
+            MasonryBlock::from_volume((GATE_HALF_WIDTH * 2.0 - 0.4) * 2.2 * 0.3, WOOD_TOUGHNESS),
             Respawnable,
         ))
         .id();
@@ -437,6 +437,7 @@ fn roof_cone(
     height: f32,
     banner: bool,
 ) {
+    let volume = std::f32::consts::PI * (diameter / 2.0).powi(2) * height / 3.0;
     let mut roof = commands.spawn((
         Mesh3d(castle.cone.clone()),
         MeshMaterial3d(castle.slate.clone()),
@@ -447,7 +448,7 @@ fn roof_cone(
         ColliderDensity(900.0),
         Friction::new(0.6),
         Restitution::new(0.05),
-        MasonryBlock,
+        MasonryBlock::from_volume(volume, SLATE_TOUGHNESS),
         Respawnable,
     ));
     if banner {
@@ -495,7 +496,7 @@ fn courtyard_building(
         ColliderDensity(700.0),
         Friction::new(0.6),
         Restitution::new(0.05),
-        MasonryBlock,
+        MasonryBlock::from_volume((half_x + 1.0) * 0.8 * (depth + 1.0), SLATE_TOUGHNESS),
         Respawnable,
     ));
     let _ = castle;
