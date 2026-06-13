@@ -88,7 +88,7 @@ fn grassy(x: f32, z: f32) -> bool {
         && p.distance(KNOLL_CENTER) > 14.0
 }
 
-const GRASS_MAX: usize = 5500;
+const GRASS_MAX: usize = 14000;
 
 fn spawn_grass(
     mut commands: Commands,
@@ -115,7 +115,7 @@ fn spawn_grass(
     .to_vec();
 
     // Jittered grid over the playable valley floor.
-    let spacing = 2.1_f32;
+    let spacing = 1.3_f32;
     let (x0, x1, z0, z1) = (-95.0, 95.0, -55.0, 150.0);
     let mut planted = 0;
     let mut gx = x0;
