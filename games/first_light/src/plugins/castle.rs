@@ -23,6 +23,7 @@ use std::f32::consts::TAU;
 
 use super::masonry::{
     self, ConeShape, MasonryAssets, MasonryBlock, SLATE_TOUGHNESS, WOOD_TOUGHNESS, spawn_block,
+    spawn_wedge,
 };
 use super::terrain::{CASTLE_CENTER, TERRACE_HEIGHT};
 use super::world::Respawnable;
@@ -131,6 +132,103 @@ pub fn defender_posts() -> Vec<(Vec3, bool)> {
     posts
 }
 
+/// Navigation data for one manned tower: where soldiers enter at the bailey,
+/// the platform center, and the spiral-stair path between them. Pure and
+/// deterministic so both the castle geometry and the attacker AI use the
+/// exact same staircase.
+pub struct TowerNav {
+    pub base: Vec3,
+    pub top: Vec3,
+    pub spiral: Vec<Vec3>,
+}
+
+fn ring_top(h: f32) -> f32 {
+    (h / 0.75_f32).round() * 0.75
+}
+
+/// The manned towers (center, radius, shaft height, outward direction).
+fn manned_towers() -> Vec<(Vec3, f32, f32, Vec3)> {
+    let o = Vec3::new(CASTLE_CENTER.x, TERRACE_HEIGHT, CASTLE_CENTER.y);
+    let mut t = Vec::new();
+    for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        t.push((o + Vec3::new(sx * WALL_HALF_X, 0.0, sz * WALL_HALF_Z), CORNER_TOWER_R, 19.0, Vec3::new(sx, 0.0, sz)));
+    }
+    t.push((o + Vec3::new(0.0, 0.0, -WALL_HALF_Z), MURAL_TOWER_R, 16.0, Vec3::NEG_Z));
+    t.push((o + Vec3::new(-WALL_HALF_X, 0.0, 0.0), MURAL_TOWER_R, 16.0, Vec3::NEG_X));
+    t.push((o + Vec3::new(WALL_HALF_X, 0.0, 0.0), MURAL_TOWER_R, 16.0, Vec3::X));
+    for sx in [-1.0_f32, 1.0] {
+        t.push((o + Vec3::new(sx * (GATE_HALF_WIDTH + 2.6), 0.0, WALL_HALF_Z + 1.2), 4.0, 18.0, Vec3::Z));
+    }
+    t
+}
+
+/// The climb polyline up a tower's spiral: a bailey approach point at the
+/// door, then helical tread centers rising to the platform.
+fn spiral_points(center: Vec3, radius: f32, top_y: f32, door_angle: f32) -> Vec<Vec3> {
+    let rm = (radius - 1.2).max(0.7);
+    let rise = 0.42;
+    // Angular step sized so consecutive ~1.2 m treads touch (no gaps).
+    let dtheta = 1.05 / rm;
+    let n = (top_y / rise).ceil().max(2.0) as usize;
+    let mut pts = Vec::with_capacity(n + 2);
+    // Approach: just outside the doorway, on the ground.
+    pts.push(center + Vec3::new(door_angle.cos() * (radius + 1.2), 0.0, door_angle.sin() * (radius + 1.2)));
+    for i in 0..=n {
+        let ang = door_angle + i as f32 * dtheta;
+        let y = (i as f32 * rise).min(top_y);
+        pts.push(center + Vec3::new(ang.cos() * rm, y, ang.sin() * rm));
+    }
+    pts.push(center + Vec3::Y * top_y); // platform center
+    pts
+}
+
+/// Builds the physical spiral stair from a tower's nav path: a central newel
+/// post and a contiguous run of stone treads the climb path rides on.
+fn build_spiral(commands: &mut Commands, assets: &MasonryAssets, nav: &TowerNav) {
+    let center = Vec3::new(nav.top.x, TERRACE_HEIGHT, nav.top.z);
+    let top_y = nav.top.y - TERRACE_HEIGHT;
+    // Central newel post.
+    spawn_block(
+        commands,
+        assets,
+        center + Vec3::Y * (top_y / 2.0),
+        Quat::IDENTITY,
+        Vec3::new(0.9, top_y, 0.9),
+    );
+    let pts = &nav.spiral;
+    for p in &pts[1..pts.len() - 1] {
+        let rdir = Vec3::new(p.x - center.x, 0.0, p.z - center.z).normalize_or_zero();
+        if rdir == Vec3::ZERO {
+            continue;
+        }
+        spawn_block(
+            commands,
+            assets,
+            Vec3::new(p.x, p.y - 0.18, p.z),
+            Quat::from_rotation_arc(Vec3::Z, rdir),
+            Vec3::new(1.2, 0.34, 1.9),
+        );
+    }
+}
+
+/// Spiral-stair navigation for every manned tower (shared by geometry + AI).
+pub fn tower_navs() -> Vec<TowerNav> {
+    manned_towers()
+        .into_iter()
+        .map(|(center, r, h, out)| {
+            let top_y = ring_top(h);
+            let inward = -Vec3::new(out.x, 0.0, out.z).normalize_or_zero();
+            let door_angle = inward.z.atan2(inward.x);
+            let spiral = spiral_points(center, r, top_y, door_angle);
+            TowerNav {
+                base: spiral[0],
+                top: center + Vec3::Y * top_y,
+                spiral,
+            }
+        })
+        .collect()
+}
+
 #[derive(Resource)]
 struct CastleAssets {
     cone: Handle<Mesh>,
@@ -139,6 +237,7 @@ struct CastleAssets {
     flame: Handle<StandardMaterial>,
     slate: Handle<StandardMaterial>,
     wood: Handle<StandardMaterial>,
+    iron: Handle<StandardMaterial>,
     window: Handle<StandardMaterial>,
     banner: Handle<StandardMaterial>,
 }
@@ -168,6 +267,12 @@ fn setup_castle_assets(
         wood: materials.add(StandardMaterial {
             base_color: Color::srgb(0.32, 0.22, 0.12),
             perceptual_roughness: 0.85,
+            ..default()
+        }),
+        iron: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.22, 0.22, 0.25),
+            metallic: 0.9,
+            perceptual_roughness: 0.45,
             ..default()
         }),
         window: materials.add(StandardMaterial {
@@ -216,43 +321,45 @@ fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res
         merlons(c, ma, o + Vec3::new(sx * (gate_clear + front_len / 2.0), wall_top, WALL_HALF_Z + WALL_THICKNESS / 2.0 - 0.2), Vec3::X, front_len - 1.5);
     }
 
-    // --- Corner towers --------------------------------------------------------
-    for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        let base = o + Vec3::new(sx * WALL_HALF_X, 0.0, sz * WALL_HALF_Z);
-        let top = ring_tower(c, ma, base, CORNER_TOWER_R, 24.0);
-        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (CORNER_TOWER_R + 0.9), 10.0, false);
+    // --- Manned towers: voussoir shafts, doorways, open fighting platforms,
+    // and an internal spiral stair (built from the shared nav path) ------------
+    for (center, radius, height, out) in manned_towers() {
+        let inward = -Vec3::new(out.x, 0.0, out.z).normalize_or_zero();
+        let top = ring_tower(c, ma, ca, center, radius, height, out, inward);
+        tower_platform(c, ma, center, radius, top);
     }
-    // --- Mural towers -----------------------------------------------------------
-    for base in [
-        o + Vec3::new(0.0, 0.0, -WALL_HALF_Z),
-        o + Vec3::new(-WALL_HALF_X, 0.0, 0.0),
-        o + Vec3::new(WALL_HALF_X, 0.0, 0.0),
-    ] {
-        let top = ring_tower(c, ma, base, MURAL_TOWER_R, 18.0);
-        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (MURAL_TOWER_R + 0.9), 7.5, false);
+    for nav in tower_navs() {
+        build_spiral(c, ma, &nav);
     }
-
-    // --- Gatehouse ----------------------------------------------------------------
-    for sx in [-1.0_f32, 1.0] {
-        let base = o + Vec3::new(sx * (GATE_HALF_WIDTH + 2.6), 0.0, WALL_HALF_Z + 1.2);
-        let top = ring_tower(c, ma, base, 4.0, 20.0);
-        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (4.0 + 0.9), 7.5, false);
-    }
-    // Gate lintel (3 courses spanning the opening).
-    lintel(c, ma, o + Vec3::new(0.0, 11.2, WALL_HALF_Z), GATE_HALF_WIDTH - 0.8, WALL_THICKNESS, 3);
-    // Raised wooden portcullis.
-    wood_slab(c, ma, ca, o + Vec3::new(0.0, 9.4, WALL_HALF_Z + 0.1), Vec3::new(GATE_HALF_WIDTH * 2.0 - 0.6, 2.6, 0.3));
+    // Gate lintel (3 courses spanning the opening) and the closed gate.
+    lintel(c, ma, o + Vec3::new(0.0, 9.6, WALL_HALF_Z), GATE_HALF_WIDTH - 0.8, WALL_THICKNESS, 4);
+    closed_gate(c, ma, ca, o);
 
     // --- Barbican: forward gate guarding the causeway ---------------------------
     let barbican_z = WALL_HALF_Z + 14.0;
     for sx in [-1.0_f32, 1.0] {
         let base = o + Vec3::new(sx * (GATE_HALF_WIDTH + 1.4), 0.0, barbican_z);
-        let top = ring_tower(c, ma, base, 2.8, 11.0);
-        roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (2.8 + 0.8), 5.0, false);
+        let top = ring_tower(c, ma, ca, base, 2.8, 11.0, Vec3::Z, Vec3::ZERO);
+        tower_platform(c, ma, base, 2.8, top);
         // Flank walls connecting back toward the gatehouse.
         wall_run(c, ma, o + Vec3::new(sx * 6.6, 0.0, WALL_HALF_Z + 5.6), Vec3::Z, barbican_z - WALL_HALF_Z - 8.6, 7.0, 1.6);
     }
     lintel(c, ma, o + Vec3::new(0.0, 8.0, barbican_z), GATE_HALF_WIDTH + 0.4, 2.2, 2);
+
+    // --- Stairs up to the wall-walk from the courtyard --------------------------
+    // Two flights inside the front wall flank the gate so defenders (and the
+    // player) can reach the curtain wall-walk and the towers from the bailey.
+    for sx in [-1.0_f32, 1.0] {
+        straight_stair(
+            c,
+            ma,
+            o + Vec3::new(sx * (GATE_HALF_WIDTH + 8.0), 0.0, WALL_HALF_Z - WALL_THICKNESS - 0.5),
+            Vec3::new(-sx, 0.0, 0.0),
+            wall_top * 1.7,
+            wall_top,
+            3.0,
+        );
+    }
 
     // --- Keep -------------------------------------------------------------------------
     let keep = o + Vec3::new(0.0, 0.0, -8.0);
@@ -272,7 +379,7 @@ fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res
     merlons(c, ma, keep + Vec3::new(-kx + 0.5, keep_top, 0.0), Vec3::Z, kz * 2.0 - 3.0);
     for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         let base = keep + Vec3::new(sx * (kx - 1.5), keep_top, sz * (kz - 1.5));
-        let top = ring_tower(c, ma, base, 2.2, 12.0);
+        let top = ring_tower(c, ma, ca, base, 2.2, 12.0, Vec3::new(sx, 0.0, sz), Vec3::ZERO);
         roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (2.2 + 0.8), 5.0, false);
     }
 
@@ -308,7 +415,7 @@ fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res
     wood_slab(c, ma, ca, stables + Vec3::Y * (course_top(4.5) + 0.4), Vec3::new(8.6, 0.8, 12.6));
 
     // Courtyard well.
-    ring_tower(c, ma, o + Vec3::new(12.0, 0.0, 16.0), 1.4, 1.4);
+    ring_tower(c, ma, ca, o + Vec3::new(12.0, 0.0, 16.0), 1.4, 1.4, Vec3::Z, Vec3::ZERO);
 
     // --- Torches: barbican, gate, courtyard, keep door ---------------------------
     for pos in [
@@ -355,8 +462,19 @@ fn wall_run(
         };
         let offset = if row % 2 == 0 { 0.0 } else { BLOCK_L / 2.0 };
         let mut s = -offset;
+        let mut idx = 0u32;
         while s < length - 0.05 {
-            let e = (s + BLOCK_L).min(length);
+            // Mixed ashlar: occasional long bond stones and short fillers
+            // give the wall hewn-to-fit variety instead of one stone size.
+            let pick = block_hash(row as u32, idx, dir);
+            let unit = if pick < 0.18 {
+                BLOCK_L * 1.8
+            } else if pick > 0.86 {
+                BLOCK_L * 0.65
+            } else {
+                BLOCK_L
+            };
+            let e = (s + unit).min(length);
             let cs = s.max(0.0);
             let w = e - cs;
             if w > 0.15 {
@@ -369,9 +487,22 @@ fn wall_run(
                     Vec3::new(w - 0.02, BLOCK_H - 0.02, t),
                 );
             }
-            s += BLOCK_L;
+            s += unit;
+            idx += 1;
         }
     }
+}
+
+/// Deterministic [0,1) for stone-size variation, keyed by course, index, and
+/// wall direction so each wall is unique but stable across runs.
+fn block_hash(row: u32, idx: u32, dir: Vec3) -> f32 {
+    let d = (dir.x.abs() * 31.0 + dir.z.abs() * 97.0) as u32;
+    let mut h = row
+        .wrapping_mul(0x9E37_79B9)
+        .wrapping_add(idx.wrapping_mul(0x85EB_CA6B))
+        .wrapping_add(d.wrapping_mul(0xC2B2_AE35));
+    h = (h ^ (h >> 15)).wrapping_mul(0x2C1B_3C6D);
+    ((h >> 16) & 0xFFFF) as f32 / 65536.0
 }
 
 /// The keep's valley-facing wall: like [`wall_run`] but with a door opening
@@ -442,21 +573,30 @@ fn pier(commands: &mut Commands, assets: &MasonryAssets, base: Vec3, side: f32, 
     }
 }
 
-/// A round tower of tangent blocks with a battered base and a corbelled top
-/// ring; returns the actual top height (whole rows).
+/// A round tower built from trapezoidal voussoirs (smooth, gapless curve)
+/// with a battered base, corbelled head, and outward-facing arrowslits.
+/// Returns the actual top height (whole rows). `outward` is the horizontal
+/// direction the field-facing arrowslits should point.
+#[allow(clippy::too_many_arguments)]
 fn ring_tower(
     commands: &mut Commands,
     assets: &MasonryAssets,
+    castle: &CastleAssets,
     base: Vec3,
     radius: f32,
     height: f32,
+    outward: Vec3,
+    door: Vec3,
 ) -> f32 {
     const ROW_H: f32 = 0.75;
-    const ARC: f32 = 1.5;
+    const ARC: f32 = 1.35;
     let radial = 1.4_f32.min(radius * 0.7);
     let rows = (height / ROW_H).round() as usize;
+    let out = Vec3::new(outward.x, 0.0, outward.z).normalize_or_zero();
+    let door = Vec3::new(door.x, 0.0, door.z).normalize_or_zero();
+    // Two bands of arrowslits up the field-facing arc.
+    let slit_rows = [rows / 3, rows / 3 + 1, rows * 2 / 3, rows * 2 / 3 + 1];
     for row in 0..rows {
-        // Battered base and corbelled head.
         let flare = match row {
             0 => 0.45,
             1 => 0.3,
@@ -469,20 +609,144 @@ fn ring_tower(
         let chord = TAU * r_mid / n as f32;
         let y = (row as f32 + 0.5) * ROW_H;
         let offset = if row % 2 == 0 { 0.0 } else { 0.5 };
+        let is_slit_row = slit_rows.contains(&row) && flare == 0.0;
         for k in 0..n {
             let angle = (k as f32 + offset) / n as f32 * TAU;
-            let pos = base + Vec3::new(angle.cos() * r_mid, y, angle.sin() * r_mid);
+            let dir = Vec3::new(angle.cos(), 0.0, angle.sin());
+            // Arched doorway: skip the lowest courses on the door-facing arc
+            // so the internal spiral stair has an entrance.
+            if row < 7 && door != Vec3::ZERO && dir.dot(door) > 0.80 {
+                continue;
+            }
+            let pos = base + Vec3::new(dir.x * r_mid, y, dir.z * r_mid);
             let rot = Quat::from_rotation_y(-(angle + std::f32::consts::FRAC_PI_2));
-            spawn_block(
+            let block = spawn_wedge(
                 commands,
                 assets,
                 pos,
                 rot,
-                Vec3::new(chord - 0.04, ROW_H - 0.02, radial + flare),
+                Vec3::new(chord + 0.02, ROW_H - 0.02, radial + flare),
             );
+            // Arrowslit: a recessed dark pane on a field-facing voussoir.
+            if is_slit_row && out != Vec3::ZERO && dir.dot(out) > 0.72 {
+                commands
+                    .entity(block)
+                    .try_insert(MeshMaterial3d(castle.window.clone()));
+            }
         }
     }
     rows as f32 * ROW_H
+}
+
+/// Caps a tower with an open fighting platform: a stone floor slab and a
+/// crenellated parapet ring (merlons with crenel gaps to shoot through).
+fn tower_platform(
+    commands: &mut Commands,
+    assets: &MasonryAssets,
+    base: Vec3,
+    radius: f32,
+    top_y: f32,
+) {
+    let r = radius - 0.4;
+    // Floor slab (square cap reads fine on a round tower fighting top).
+    spawn_block(
+        commands,
+        assets,
+        base + Vec3::new(0.0, top_y - 0.2, 0.0),
+        Quat::IDENTITY,
+        Vec3::new(r * 2.0, 0.4, r * 2.0),
+    );
+    // Merlon ring with crenel gaps between teeth.
+    let count = ((TAU * r) / 2.2).round().max(6.0) as usize;
+    for k in 0..count {
+        let angle = k as f32 / count as f32 * TAU;
+        let dir = Vec3::new(angle.cos(), 0.0, angle.sin());
+        let pos = base + Vec3::new(dir.x * r, top_y + 0.65, dir.z * r);
+        let rot = Quat::from_rotation_y(-(angle + std::f32::consts::FRAC_PI_2));
+        spawn_block(commands, assets, pos, rot, Vec3::new(1.1, 1.3, 0.6));
+    }
+}
+
+/// A straight flight of stone steps climbing `run` (horizontal) over `rise`
+/// (vertical) along `dir`, `width` wide, starting at `base` (bottom front
+/// edge, on the ground). Steps are solid so soldiers' downward ground-cast
+/// finds each tread and walks up them.
+fn straight_stair(
+    commands: &mut Commands,
+    assets: &MasonryAssets,
+    base: Vec3,
+    dir: Vec3,
+    run: f32,
+    rise: f32,
+    width: f32,
+) {
+    let dir = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
+    let yaw = (-dir.x).atan2(-dir.z);
+    let rotation = Quat::from_rotation_y(yaw);
+    let step_h = 0.5_f32;
+    let steps = (rise / step_h).ceil().max(1.0) as usize;
+    let tread = run / steps as f32;
+    for i in 0..steps {
+        // Each step is a solid block from the ground up to its tread height,
+        // so the flight is a filled staircase (a ramp of teeth).
+        let h = (i as f32 + 1.0) * step_h;
+        let along = (i as f32 + 0.5) * tread;
+        let center = base + dir * along + Vec3::Y * (h / 2.0);
+        spawn_block(
+            commands,
+            assets,
+            center,
+            rotation,
+            Vec3::new(width, h, tread + 0.05),
+        );
+    }
+}
+
+/// The closed castle gate: twin oak leaves filling the passage plus a
+/// lowered iron-bound portcullis in front. This is what physically blocks
+/// the attackers until the player breaches it (see `gate_passage`).
+fn closed_gate(
+    commands: &mut Commands,
+    masonry: &MasonryAssets,
+    castle: &CastleAssets,
+    o: Vec3,
+) {
+    let z = CASTLE_CENTER.y + WALL_HALF_Z; // matches gate_passage()
+    let _ = z;
+    let center = o + Vec3::new(0.0, 0.0, WALL_HALF_Z);
+    // Two oak leaves meeting at the centerline, filling the opening.
+    for sx in [-1.0_f32, 1.0] {
+        commands.spawn((
+            Mesh3d(masonry.cube.clone()),
+            MeshMaterial3d(castle.wood.clone()),
+            Transform::from_translation(center + Vec3::new(sx * GATE_HALF_WIDTH / 2.0, 4.4, 0.35))
+                .with_scale(Vec3::new(GATE_HALF_WIDTH - 0.1, 8.6, 0.5)),
+            RigidBody::Static,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            ColliderDensity(650.0),
+            Friction::new(0.6),
+            Restitution::new(0.05),
+            MasonryBlock::from_volume(GATE_HALF_WIDTH * 8.6 * 0.5, WOOD_TOUGHNESS),
+            Respawnable,
+        ));
+    }
+    // Lowered portcullis: an iron grille just outside the leaves.
+    for k in 0..(GATE_HALF_WIDTH * 2.0 / 0.7) as i32 {
+        let x = -GATE_HALF_WIDTH + 0.5 + k as f32 * 0.7;
+        commands.spawn((
+            Mesh3d(masonry.cube.clone()),
+            MeshMaterial3d(castle.iron.clone()),
+            Transform::from_translation(center + Vec3::new(x, 4.4, -0.2))
+                .with_scale(Vec3::new(0.14, 8.8, 0.14)),
+            RigidBody::Static,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            ColliderDensity(1500.0),
+            Friction::new(0.5),
+            Restitution::new(0.05),
+            MasonryBlock::from_volume(0.2, WOOD_TOUGHNESS),
+            Respawnable,
+        ));
+    }
 }
 
 /// A row of merlons (crenellation teeth) along `dir`, centered at `center`.

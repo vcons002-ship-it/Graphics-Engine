@@ -1,5 +1,61 @@
 # DEVLOG
 
+## Entry #11 — 2026-06-13 — Spiral stairs and the attacker swarm
+
+- **Spiral staircases** inside every manned tower: a doorway is cut in the
+  shaft's bailey-facing base (`ring_tower` skips those voussoirs), a central
+  newel post rises to the platform, and a contiguous helix of stone treads
+  (angular step sized so ~1.2 m treads touch — no gaps to fall through)
+  climbs around it. A pure `castle::tower_navs()` generates the climb path,
+  and `build_spiral` lays the geometry from that same path, so steps and
+  navigation can't drift apart.
+- **Attacker swarm**: through the breached gate (or off a ladder) attackers
+  enter `Hunting` — seek the nearest foe in 3D; chase a ground-level enemy
+  directly, or for one up on a tower/wall route to the nearest tower base
+  and `ClimbSpiral` up the helix tread by tread (geometry-following keeps
+  them on the steps) to engage the archers on the platform.
+- Cached the spiral paths in a `CastleNav` resource; shared `walk_toward`
+  locomotion helper.
+
+Verified (FL_AUTO_FIRE siege, FL_BATTLE_LOG): the trebuchet broke the gate,
+the lead element pushed to z=-174 inside the walls, and defenders fell
+182 -> ~84 as the courtyard was overrun — no panic. The elevated wall-walk
+and tower archers are the last holdouts (towers do their job); fully
+clearing them via the spirals is slow and is the next tuning target.
+
+
+## Entry #10 — 2026-06-13 — Castle defences: gate, voussoirs, stairs, ladders
+
+Playtest gaps fixed across architecture and battle AI.
+
+- **New block shape**: a trapezoidal voussoir (`masonry::spawn_wedge`) —
+  a cuboid deformed wider on its outer face — tiles tower rings tightly,
+  killing the faceted gaps and reading as hewn-to-fit curves. Walls now
+  mix long bond stones and short fillers for stone-size variety.
+- **Open fighting platforms**: wall/corner/mural/gatehouse/barbican towers
+  lost their cone roofs for stone floor caps + crenellated parapet rings,
+  with outward arrowslits up the field-facing arc and a short stair from
+  the wall-walk; the great tower keeps its spire.
+- **Closed gate**: twin oak leaves + a lowered iron portcullis fill the
+  passage — this is what `gate_passage()` detects, so the assault really
+  stalls until the player breaches it (confirmed: lead element reaches the
+  gate line z=-156 and holds while both sides take casualties).
+- **Bailey stairs** climb to the wall-walk.
+- **Soldier locomotion** now follows real geometry near the castle: a
+  downward ray finds the static surface underfoot (stairs/ramps/wall-walk),
+  clamped to a climbable step so a sheer wall can't be scaled without a
+  ladder. One mechanic makes stairs, ramps, and walls all walkable.
+- **Ladder assault**: one crew per company carries a plank, peels off to an
+  assigned wall spot, plants a walkable ladder ramp, and scales the wall to
+  fight defenders on the walk.
+- Wall archers now fire on the approaching column from 135 m; attacker
+  archers volley with no minimum range.
+
+Honest limits: defenders garrison their posts at spawn (they don't path up
+the bailey stairs); the demonstrated AI climb is the ladder scale. Tower
+interiors are open platforms, not full spiral-stair interiors.
+
+
 ## Entry #9 — 2026-06-13 — The battle at scale (~1,150 soldiers)
 
 Twelve companies of 81 attackers (~970) stage in waves and march the
