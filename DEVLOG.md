@@ -1,5 +1,31 @@
 # DEVLOG
 
+## Entry #12 — 2026-06-13 — Graphics pass: trees, grass, soldiers, polish
+
+Four vertical slices, each screenshot-verified.
+
+- **Branchy trees** (`vegetation.rs`): procedurally grown trunks that fork
+  through several limb generations with leaf clusters at the tips, merged
+  into per-variant meshes (a small `MeshAccum` welds transformed
+  cylinder/sphere primitives). 6 pine + 4 oak variants → ~380 trees still
+  share ~24 meshes and stay instanced. Pines get drooping needled whorls
+  and a spire; oaks fork into rounded canopies.
+- **Grass + ground** (`grass.rs`, terrain bake → 2048²): ~14k instanced
+  grass tufts (7-blade clusters sharing one mesh) carpet the grassy valley
+  floor; a travelling wind wave plus a flutter tilts each from its base so
+  the meadow ripples — one transform write per tuft.
+- **Articulated soldiers** (`soldiers.rs`): two legs + two arms on pivots
+  at hip/shoulder; `animate_limbs` runs a walk cycle (legs/arms in
+  opposing phase) while moving and an arm chop while fighting, but only
+  within 75 m of the camera — far units keep a static pose, so the ~1,150
+  army stays cheap (distance-LOD).
+- **Polish**: engine `ColorGrading` default (warmer, richer, mild midtone
+  contrast); the great-tower banner flutters; an 18-bird flock wheels over
+  the valley.
+
+Deferred: ground normal-map relief (conflicts with the 1× albedo UV — wants
+a separate tiling pass), torch smoke, GPU-shader grass for full map cover.
+
 ## Entry #11 — 2026-06-13 — Spiral stairs and the attacker swarm
 
 - **Spiral staircases** inside every manned tower: a doorway is cut in the
