@@ -44,11 +44,11 @@ impl Plugin for CastlePlugin {
 
 /// Curtain wall footprint (local space, castle centered at origin, gate
 /// facing +Z toward the valley).
-const WALL_HALF_X: f32 = 42.0;
-const WALL_HALF_Z: f32 = 34.0;
-const WALL_HEIGHT: f32 = 14.0;
+pub const WALL_HALF_X: f32 = 42.0;
+pub const WALL_HALF_Z: f32 = 34.0;
+pub const WALL_HEIGHT: f32 = 14.0;
 const WALL_THICKNESS: f32 = 2.2;
-const GATE_HALF_WIDTH: f32 = 4.5;
+pub const GATE_HALF_WIDTH: f32 = 4.5;
 /// Corner tower radius and clearance the walls keep from tower centers.
 const CORNER_TOWER_R: f32 = 6.5;
 const TOWER_GAP: f32 = 7.0;
@@ -64,6 +64,71 @@ const BLOCK_H: f32 = 0.7;
 /// must use this height.
 fn course_top(height: f32) -> f32 {
     (height / BLOCK_H).round() * BLOCK_H
+}
+
+/// World-space point in the middle of the gate passage (soldiers test it
+/// for blockage) at chest height.
+pub fn gate_passage() -> Vec3 {
+    Vec3::new(
+        CASTLE_CENTER.x,
+        TERRACE_HEIGHT + 1.6,
+        CASTLE_CENTER.y + WALL_HALF_Z,
+    )
+}
+
+/// Defender stations computed from the castle layout: wall-walk posts along
+/// every curtain segment, archer perches on tower tops, and courtyard
+/// reserves. `true` = archer.
+pub fn defender_posts() -> Vec<(Vec3, bool)> {
+    let o = Vec3::new(CASTLE_CENTER.x, TERRACE_HEIGHT, CASTLE_CENTER.y);
+    let wall_top = course_top(WALL_HEIGHT);
+    let ring_top = |h: f32| (h / 0.75_f32).round() * 0.75;
+    let mut posts = Vec::new();
+
+    // Wall-walks: spaced posts along each wall line (atop the wall).
+    let mut wall_line = |from: Vec3, to: Vec3, spacing: f32| {
+        let length = from.distance(to);
+        let n = (length / spacing).floor().max(1.0) as usize;
+        for k in 0..=n {
+            let p = from.lerp(to, k as f32 / n as f32);
+            posts.push((o + p + Vec3::Y * wall_top, false));
+        }
+    };
+    wall_line(Vec3::new(-WALL_HALF_X + 8.0, 0.0, -WALL_HALF_Z), Vec3::new(WALL_HALF_X - 8.0, 0.0, -WALL_HALF_Z), 3.2);
+    wall_line(Vec3::new(-WALL_HALF_X, 0.0, -WALL_HALF_Z + 8.0), Vec3::new(-WALL_HALF_X, 0.0, WALL_HALF_Z - 8.0), 3.2);
+    wall_line(Vec3::new(WALL_HALF_X, 0.0, -WALL_HALF_Z + 8.0), Vec3::new(WALL_HALF_X, 0.0, WALL_HALF_Z - 8.0), 3.2);
+    wall_line(Vec3::new(-WALL_HALF_X + 8.0, 0.0, WALL_HALF_Z), Vec3::new(-12.0, 0.0, WALL_HALF_Z), 2.6);
+    wall_line(Vec3::new(12.0, 0.0, WALL_HALF_Z), Vec3::new(WALL_HALF_X - 8.0, 0.0, WALL_HALF_Z), 2.6);
+
+    // Archers on the tower tops.
+    for (pos, r, h) in [
+        (Vec3::new(-WALL_HALF_X, 0.0, -WALL_HALF_Z), CORNER_TOWER_R, 24.0),
+        (Vec3::new(WALL_HALF_X, 0.0, -WALL_HALF_Z), CORNER_TOWER_R, 24.0),
+        (Vec3::new(-WALL_HALF_X, 0.0, WALL_HALF_Z), CORNER_TOWER_R, 24.0),
+        (Vec3::new(WALL_HALF_X, 0.0, WALL_HALF_Z), CORNER_TOWER_R, 24.0),
+        (Vec3::new(0.0, 0.0, -WALL_HALF_Z), MURAL_TOWER_R, 18.0),
+        (Vec3::new(-WALL_HALF_X, 0.0, 0.0), MURAL_TOWER_R, 18.0),
+        (Vec3::new(WALL_HALF_X, 0.0, 0.0), MURAL_TOWER_R, 18.0),
+        (Vec3::new(-(GATE_HALF_WIDTH + 2.6), 0.0, WALL_HALF_Z + 1.2), 4.0, 20.0),
+        (Vec3::new(GATE_HALF_WIDTH + 2.6, 0.0, WALL_HALF_Z + 1.2), 4.0, 20.0),
+    ] {
+        let top = ring_top(h);
+        posts.push((o + pos + Vec3::new(r * 0.3, top, 0.0), true));
+        posts.push((o + pos + Vec3::new(-r * 0.3, top, -r * 0.2), true));
+        posts.push((o + pos + Vec3::new(0.0, top, r * 0.25), true));
+        posts.push((o + pos + Vec3::new(-r * 0.2, top, r * 0.15), true));
+    }
+
+    // Courtyard reserves in loose ranks before the keep.
+    for row in 0..6 {
+        for col in 0..12 {
+            posts.push((
+                o + Vec3::new((col as f32 - 5.5) * 2.6, 0.0, 14.0 + row as f32 * 2.4),
+                false,
+            ));
+        }
+    }
+    posts
 }
 
 #[derive(Resource)]

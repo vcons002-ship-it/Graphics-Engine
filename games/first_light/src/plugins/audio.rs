@@ -9,7 +9,7 @@
 //! sounds attenuate from their world position relative to the camera's
 //! [`SpatialListener`].
 
-use bevy::audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, Volume};
+use bevy::audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, SpatialScale, Volume};
 use bevy::prelude::*;
 
 use engine::player::Grounded;
@@ -37,6 +37,10 @@ pub enum SoundKind {
     FrameThunk,
     /// Winch creak while cranking.
     Creak,
+    /// Metal-on-metal melee hit.
+    Clank,
+    /// War horn at wave starts and victory.
+    Horn,
 }
 
 #[derive(Message)]
@@ -54,6 +58,8 @@ struct SoundBank {
     whoosh: Handle<AudioSource>,
     thunk: Handle<AudioSource>,
     creak: Handle<AudioSource>,
+    clanks: Vec<Handle<AudioSource>>,
+    horn: Handle<AudioSource>,
     steps: Vec<Handle<AudioSource>>,
 }
 
@@ -203,6 +209,41 @@ fn synth_creak() -> AudioSource {
     wav(&out)
 }
 
+/// Sword-on-shield clank: a small cluster of ringing partials.
+fn synth_clank(seed: u64) -> AudioSource {
+    let mut rng = Lcg(seed);
+    let len = (SAMPLE_RATE as f32 * 0.22) as usize;
+    let mut out = vec![0.0f32; len];
+    let partials: Vec<(f32, f32)> = (0..4)
+        .map(|_| (1400.0 + rng.next().abs() * 2600.0, 0.2 + rng.next().abs() * 0.3))
+        .collect();
+    for (i, sample) in out.iter_mut().enumerate() {
+        let t = i as f32 / SAMPLE_RATE as f32;
+        let mut v = 0.0;
+        for &(f, a) in &partials {
+            v += (std::f32::consts::TAU * f * t).sin() * a;
+        }
+        *sample = v * (-30.0 * t).exp() * 0.5;
+    }
+    wav(&out)
+}
+
+/// A war horn: low brassy tone with overtones, swelling then held.
+fn synth_horn() -> AudioSource {
+    let len = (SAMPLE_RATE as f32 * 1.8) as usize;
+    let mut out = vec![0.0f32; len];
+    for (i, sample) in out.iter_mut().enumerate() {
+        let t = i as f32 / SAMPLE_RATE as f32;
+        let swell = (t * 3.0).min(1.0) * (1.0 - ((t - 1.3) / 0.5).clamp(0.0, 1.0));
+        let f = 196.0 * (1.0 + 0.01 * (std::f32::consts::TAU * 5.0 * t).sin());
+        let v = (std::f32::consts::TAU * f * t).sin() * 0.5
+            + (std::f32::consts::TAU * 2.0 * f * t).sin() * 0.25
+            + (std::f32::consts::TAU * 3.0 * f * t).sin() * 0.12;
+        *sample = (v * swell).tanh() * 0.8;
+    }
+    wav(&out)
+}
+
 /// A soft grass footstep.
 fn synth_step(seed: u64) -> AudioSource {
     let mut rng = Lcg(seed);
@@ -249,12 +290,14 @@ fn setup_sound_bank(mut commands: Commands, mut sources: ResMut<Assets<AudioSour
         whoosh: sources.add(synth_whoosh()),
         thunk: sources.add(synth_thunk()),
         creak: sources.add(synth_creak()),
+        clanks: (0..3).map(|k| sources.add(synth_clank(400 + k))).collect(),
+        horn: sources.add(synth_horn()),
         steps: (0..4).map(|k| sources.add(synth_step(300 + k))).collect(),
     };
     // Valley wind, non-spatial, quiet, forever.
     commands.spawn((
         AudioPlayer(sources.add(synth_wind())),
-        PlaybackSettings::LOOP.with_volume(Volume::Linear(0.16)),
+        PlaybackSettings::LOOP.with_volume(Volume::Linear(0.28)),
     ));
     commands.insert_resource(bank);
 }
@@ -290,11 +333,17 @@ fn play_sounds(
             SoundKind::Whoosh => (bank.whoosh.clone(), 1.0 * event.intensity),
             SoundKind::FrameThunk => (bank.thunk.clone(), 1.1 * event.intensity),
             SoundKind::Creak => (bank.creak.clone(), 0.7 * event.intensity),
+            SoundKind::Clank => (pick(&bank.clanks), 0.5 * event.intensity),
+            SoundKind::Horn => (bank.horn.clone(), 1.2 * event.intensity),
         };
         commands.spawn((
             AudioPlayer(source),
             PlaybackSettings::DESPAWN
                 .with_spatial(true)
+                // Default spatial scale treats 1 m as 1 audio unit, which
+                // mutes anything past ~30 m; compress distances so a hit
+                // 200 m away still lands.
+                .with_spatial_scale(SpatialScale::new(0.045))
                 .with_volume(Volume::Linear(volume.clamp(0.05, 2.0))),
             Transform::from_translation(event.position),
         ));

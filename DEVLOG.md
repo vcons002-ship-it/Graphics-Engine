@@ -1,5 +1,49 @@
 # DEVLOG
 
+## Entry #9 — 2026-06-13 — The battle at scale (~1,150 soldiers)
+
+Twelve companies of 81 attackers (~970) stage in waves and march the
+causeway; defenders densified to ~180 (wall posts every 3 m, four
+archers per tower, courtyard reserve ranks). Engineering that made the
+5x scale-up free:
+
+- **BattleGrid**: a uniform 6 m spatial grid rebuilt each frame; melee
+  engagement, marching separation, and arrow hit-tests all query cells
+  instead of scanning every soldier (the old O(N^2) targeting would have
+  cost ~4M distance checks per frame at this count).
+- Long-range archery targets from a quarter-strided snapshot; defender
+  facing scans staggered to one frame in six.
+- Marching separation (grid-based push-away) keeps the column from
+  collapsing into a blob in the causeway funnel.
+
+Verified: 972/182 spawn, lead element marched z=-82 to the gate line at
+-164, then 49 casualties as the gate fight opened. The column reads as a
+river of red on the causeway from the trebuchet position.
+
+## Entry #8 — 2026-06-12 — The siege battle + spatial audio fix
+
+- **Audio was silent beyond footsteps**: bevy's default spatial scale
+  treats 1 m as 1 audio unit, so a 200 m impact played at ~1/200
+  amplitude. Spatial one-shots now use `SpatialScale(0.045)`. (Footsteps
+  were the only non-spatial sound — that's why they survived.)
+- **Armies** (`soldiers.rs`): ~196 attackers + ~90 defenders as
+  lightweight kinematic agents steered over the pure terrain function
+  (no character controllers). Defenders man wall-walks, tower tops
+  (archers), and courtyard ranks computed from the castle layout;
+  attackers stage in companies and march the causeway in loose formation.
+  Arrows are visual-ballistic; melee trades synthesized clanks; a war
+  horn opens the battle.
+- **The player is the decisive force**: the gate holds while masonry
+  blocks the passage (live shape-test at the gate point), so the assault
+  stalls under defending arrow fire. Trebuchet `BlastEvent`s ragdoll
+  everyone in the breach radius, fast debris plows through ranks
+  (`CollisionStart` vs the soldiers' kinematic capsules), and when the
+  last defender falls: victory horn + "THE CASTLE HAS FALLEN" banner.
+- Verified headless via `FL_BATTLE_LOG=1`: lead element advanced
+  z=-54 -> -150 (the gate) over ~75 sim-seconds, then casualties began
+  (191/89 alive, 6 down); screenshot shows the red column massing at the
+  gate. Battle resets with Restart.
+
 ## Entry #7 — 2026-06-12 — Trebuchet, expanded fortress, heavy impacts
 
 - Roof cones no longer fracture into four giant cubes: fragments cap at
