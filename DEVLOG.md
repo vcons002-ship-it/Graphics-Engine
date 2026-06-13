@@ -1,5 +1,37 @@
 # DEVLOG
 
+## Entry #10 — 2026-06-13 — Castle defences: gate, voussoirs, stairs, ladders
+
+Playtest gaps fixed across architecture and battle AI.
+
+- **New block shape**: a trapezoidal voussoir (`masonry::spawn_wedge`) —
+  a cuboid deformed wider on its outer face — tiles tower rings tightly,
+  killing the faceted gaps and reading as hewn-to-fit curves. Walls now
+  mix long bond stones and short fillers for stone-size variety.
+- **Open fighting platforms**: wall/corner/mural/gatehouse/barbican towers
+  lost their cone roofs for stone floor caps + crenellated parapet rings,
+  with outward arrowslits up the field-facing arc and a short stair from
+  the wall-walk; the great tower keeps its spire.
+- **Closed gate**: twin oak leaves + a lowered iron portcullis fill the
+  passage — this is what `gate_passage()` detects, so the assault really
+  stalls until the player breaches it (confirmed: lead element reaches the
+  gate line z=-156 and holds while both sides take casualties).
+- **Bailey stairs** climb to the wall-walk.
+- **Soldier locomotion** now follows real geometry near the castle: a
+  downward ray finds the static surface underfoot (stairs/ramps/wall-walk),
+  clamped to a climbable step so a sheer wall can't be scaled without a
+  ladder. One mechanic makes stairs, ramps, and walls all walkable.
+- **Ladder assault**: one crew per company carries a plank, peels off to an
+  assigned wall spot, plants a walkable ladder ramp, and scales the wall to
+  fight defenders on the walk.
+- Wall archers now fire on the approaching column from 135 m; attacker
+  archers volley with no minimum range.
+
+Honest limits: defenders garrison their posts at spawn (they don't path up
+the bailey stairs); the demonstrated AI climb is the ladder scale. Tower
+interiors are open platforms, not full spiral-stair interiors.
+
+
 ## Entry #9 — 2026-06-13 — The battle at scale (~1,150 soldiers)
 
 Twelve companies of 81 attackers (~970) stage in waves and march the
