@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use super::audio::{SoundEvent, SoundKind};
 use super::castle::{self, gate_passage};
 use super::masonry::{MasonryBlock, PreTickVelocity};
-use super::terrain::{CASTLE_CENTER, terrain_height};
+use super::terrain::{CASTLE_CENTER, TERRACE_HEIGHT, terrain_height};
 use super::world::Respawnable;
 use engine::prelude::*;
 
@@ -74,6 +74,8 @@ pub enum Side {
 enum State {
     /// Attackers advancing on the castle.
     Marching { waypoint: usize },
+    /// Climbing a planted ladder up onto the wall-walk.
+    Scaling { target: Vec3 },
     /// Defenders at their station.
     Holding,
     /// Trading blows with a nearby enemy.
@@ -86,12 +88,23 @@ enum State {
 struct Soldier {
     side: Side,
     archer: bool,
+    /// Carries a scaling ladder (peels off to the wall to plant and climb).
+    ladder: bool,
     state: State,
-    /// Station for defenders; loose-formation offset for attackers.
+    /// Station for defenders; loose-formation offset for attackers; for
+    /// ladder crews, `post.x` is the assigned wall-attack x position.
     post: Vec3,
     cooldown: f32,
     seed: f32,
 }
+
+/// A planted scaling ladder leaning on the wall (walkable static ramp).
+#[derive(Component)]
+struct Ladder;
+
+/// The carried-ladder visual a crew holds, despawned when the ladder plants.
+#[derive(Component)]
+struct Carrying(Entity);
 
 /// A visual-ballistic arrow (no physics body).
 #[derive(Component)]
@@ -172,6 +185,7 @@ struct SoldierAssets {
     stick: Handle<Mesh>,
     shield: Handle<Mesh>,
     arrow: Handle<Mesh>,
+    plank: Handle<Mesh>,
     attacker_tunics: Vec<Handle<StandardMaterial>>,
     defender_tunics: Vec<Handle<StandardMaterial>>,
     skin: Handle<StandardMaterial>,
@@ -201,6 +215,7 @@ fn setup_soldier_assets(
         stick: meshes.add(Cuboid::new(0.05, 1.7, 0.05)),
         shield: meshes.add(Cuboid::new(0.45, 0.62, 0.07)),
         arrow: meshes.add(Cuboid::new(0.03, 0.03, 0.6)),
+        plank: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         attacker_tunics: [
             Color::srgb(0.55, 0.10, 0.10),
             Color::srgb(0.48, 0.13, 0.08),
@@ -246,12 +261,14 @@ fn waypoints() -> [Vec3; 6] {
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_soldier(
     commands: &mut Commands,
     assets: &SoldierAssets,
     position: Vec3,
     side: Side,
     archer: bool,
+    ladder: bool,
     post: Vec3,
     seed: u64,
 ) {
@@ -264,11 +281,12 @@ fn spawn_soldier(
         Side::Attacker => State::Marching { waypoint: 0 },
         Side::Defender => State::Holding,
     };
-    commands
+    let id = commands
         .spawn((
             Soldier {
                 side,
                 archer,
+                ladder,
                 state,
                 post,
                 cooldown: hash01(seed.wrapping_add(7)) * 2.0,
@@ -317,7 +335,23 @@ fn spawn_soldier(
                     Transform::from_xyz(-0.34, 0.2, 0.12),
                 ));
             }
-        });
+        })
+        .id();
+
+    // Ladder crews shoulder a long plank.
+    if ladder {
+        let plank = commands
+            .spawn((
+                ChildOf(id),
+                Mesh3d(assets.plank.clone()),
+                MeshMaterial3d(assets.wood.clone()),
+                Transform::from_xyz(0.0, 1.0, -0.4)
+                    .with_rotation(Quat::from_rotation_x(0.5))
+                    .with_scale(Vec3::new(0.5, 0.14, 3.6)),
+            ))
+            .id();
+        commands.entity(id).insert(Carrying(plank));
+    }
 }
 
 fn spawn_armies(mut commands: Commands, assets: Res<SoldierAssets>) {
@@ -325,7 +359,7 @@ fn spawn_armies(mut commands: Commands, assets: Res<SoldierAssets>) {
     // off the towers).
     for (k, (post, tower_archer)) in castle::defender_posts().into_iter().enumerate() {
         let archer = tower_archer || k % 3 == 0;
-        spawn_soldier(&mut commands, &assets, post, Side::Defender, archer, post, k as u64);
+        spawn_soldier(&mut commands, &assets, post, Side::Defender, archer, false, post, k as u64);
     }
 
     // A host: twelve companies of 81 staged in waves across the meadow;
@@ -342,18 +376,27 @@ fn spawn_armies(mut commands: Commands, assets: Res<SoldierAssets>) {
                 let x = cx + (file as f32 - 4.0) * 1.9 + (hash01(n) - 0.5) * 1.2;
                 let z = cz + rank as f32 * 1.9 + (hash01(n + 999) - 0.5) * 1.2;
                 let position = Vec3::new(x, terrain_height(x, z) + 0.85, z);
-                let lateral = Vec3::new(
-                    (hash01(n + 5) - 0.5) * 12.0,
-                    0.0,
-                    (hash01(n + 11) - 0.5) * 6.0,
-                );
+                // One ladder crew per company (front-center file); they peel
+                // off to scale the curtain wall at a spread-out x position.
+                let ladder = rank == 0 && file == 4;
+                let post = if ladder {
+                    let wall_x = ((company as f32) - 5.5) * 7.0;
+                    Vec3::new(wall_x.clamp(-(castle::WALL_HALF_X - 8.0), castle::WALL_HALF_X - 8.0), 0.0, 0.0)
+                } else {
+                    Vec3::new(
+                        (hash01(n + 5) - 0.5) * 12.0,
+                        0.0,
+                        (hash01(n + 11) - 0.5) * 6.0,
+                    )
+                };
                 spawn_soldier(
                     &mut commands,
                     &assets,
                     position,
                     Side::Attacker,
-                    n % 5 == 0,
-                    lateral,
+                    n % 5 == 0 && !ladder,
+                    ladder,
+                    post,
                     n + 10_000,
                 );
             }
@@ -396,6 +439,55 @@ fn nearest_enemy(
 }
 
 const WALK_SPEED: f32 = 3.1;
+/// Within this distance of the castle, soldiers follow real geometry.
+const CASTLE_NEAR: f32 = 80.0;
+/// Ladder foot distance out from the wall face.
+const LADDER_RUN: f32 = 5.6;
+
+/// Plants a walkable scaling ladder (a static wooden ramp) leaning from the
+/// terrace `foot` up to the wall-walk `top`.
+fn plant_ladder(commands: &mut Commands, assets: &SoldierAssets, foot: Vec3, top: Vec3) {
+    let along = top - foot;
+    let length = along.length();
+    let dir = along.normalize_or_zero();
+    commands.spawn((
+        Ladder,
+        Mesh3d(assets.plank.clone()),
+        MeshMaterial3d(assets.wood.clone()),
+        Transform::from_translation((foot + top) * 0.5)
+            .with_rotation(Quat::from_rotation_arc(Vec3::Z, dir))
+            .with_scale(Vec3::new(2.0, 0.2, length)),
+        RigidBody::Static,
+        Collider::cuboid(1.0, 1.0, 1.0),
+        Respawnable,
+    ));
+}
+
+/// Surface height under `p` for soldier locomotion. Near the castle a
+/// downward ray finds the static surface underfoot (stairs, ramps, the
+/// wall-walk), clamped to a climbable step so a sheer wall can't be scaled
+/// without a ladder; out in the meadow the terrain function suffices.
+fn ground_under(spatial: &SpatialQuery, bodies: &Query<&RigidBody>, p: Vec3, feet: f32) -> f32 {
+    let terrain = terrain_height(p.x, p.z);
+    if Vec2::new(p.x, p.z).distance(CASTLE_CENTER) > CASTLE_NEAR {
+        return terrain;
+    }
+    const STEP_UP: f32 = 0.7;
+    const REACH: f32 = 2.4;
+    let origin = Vec3::new(p.x, feet + STEP_UP, p.z);
+    let is_static = |e: Entity| matches!(bodies.get(e), Ok(RigidBody::Static));
+    spatial
+        .cast_ray_predicate(
+            origin,
+            Dir3::NEG_Y,
+            REACH,
+            true,
+            &SpatialQueryFilter::default(),
+            &is_static,
+        )
+        .map(|hit| (origin.y - hit.distance).max(terrain))
+        .unwrap_or(terrain)
+}
 
 #[allow(clippy::too_many_arguments)]
 fn soldier_ai(
@@ -407,6 +499,7 @@ fn soldier_ai(
     mut sounds: MessageWriter<SoundEvent>,
     mut soldiers: Query<(Entity, &mut Soldier, &mut Transform)>,
     bodies: Query<&RigidBody>,
+    carrying: Query<&Carrying>,
     masonry: Query<(), With<MasonryBlock>>,
     mut kill_list: Local<Vec<Entity>>,
     mut frame: Local<u32>,
@@ -457,6 +550,35 @@ fn soldier_ai(
                 continue;
             }
             State::Marching { waypoint } => {
+                // Ladder crews peel off near the wall: head to their assigned
+                // wall-base spot, plant a ladder, and start scaling.
+                if soldier.ladder && waypoint >= 3 {
+                    let o = Vec3::new(CASTLE_CENTER.x, TERRACE_HEIGHT, CASTLE_CENTER.y);
+                    let wall_front = CASTLE_CENTER.y + castle::WALL_HALF_Z;
+                    let wall_x = soldier.post.x;
+                    let foot = Vec3::new(o.x + wall_x, TERRACE_HEIGHT, wall_front + LADDER_RUN);
+                    let here = transform.translation;
+                    let mut to = foot - here;
+                    to.y = 0.0;
+                    if to.length() < 2.6 {
+                        let top = Vec3::new(o.x + wall_x, TERRACE_HEIGHT + castle::WALL_HEIGHT, wall_front);
+                        plant_ladder(&mut commands, &assets, foot, top);
+                        if let Ok(carried) = carrying.get(entity) {
+                            commands.entity(carried.0).try_despawn();
+                        }
+                        soldier.state = State::Scaling {
+                            target: top - Vec3::new(0.0, 0.0, 1.8),
+                        };
+                    } else {
+                        let step = to.normalize_or_zero() * WALK_SPEED * dt;
+                        transform.translation += step;
+                        let feet = transform.translation.y - 0.85;
+                        transform.translation.y =
+                            ground_under(&spatial, &bodies, transform.translation, feet) + 0.85;
+                        transform.rotation = Quat::from_rotation_y((-step.x).atan2(-step.z));
+                    }
+                    continue;
+                }
                 let target = if waypoint < route.len() {
                     route[waypoint] + soldier.post * (1.0 - waypoint as f32 * 0.15).max(0.3)
                 } else {
@@ -495,10 +617,15 @@ fn soldier_ai(
                         * WALK_SPEED
                         * dt;
                     transform.translation += step;
-                    transform.translation.y = terrain_height(
-                        transform.translation.x,
-                        transform.translation.z,
-                    ) + 0.85
+                    // Follow the ground: near the castle, ray-cast down onto
+                    // whatever static surface is underfoot (stairs, ramps,
+                    // wall-walk) so soldiers walk up steps and planted
+                    // ladders; out in the meadow, use the cheap terrain math.
+                    let p = transform.translation;
+                    let feet = p.y - 0.85;
+                    let ground = ground_under(&spatial, &bodies, p, feet);
+                    transform.translation.y = ground
+                        + 0.85
                         + (time.elapsed_secs() * 9.0 + soldier.seed * 20.0).sin().abs() * 0.06;
                     if step.length_squared() > 0.0 {
                         let yaw = (-step.x).atan2(-step.z);
@@ -506,15 +633,37 @@ fn soldier_ai(
                     }
                 }
 
-                // Attacker archers volley at the walls while advancing.
+                // Attacker archers volley at the walls and defenders as they
+                // advance (no minimum range — loose whenever a target is up).
                 if archer
                     && soldier.cooldown <= 0.0
-                    && let Some((_, target_pos, d)) =
-                        nearest_enemy(&snapshot, transform.translation, side, 90.0)
-                    && d > 36.0
+                    && let Some((_, target_pos, _)) =
+                        nearest_enemy(&snapshot, transform.translation, side, 95.0)
                 {
-                    soldier.cooldown = 3.0 + soldier.seed * 2.5;
+                    soldier.cooldown = 2.6 + soldier.seed * 2.2;
                     loose_arrow(&mut commands, &assets, transform.translation, target_pos, side);
+                }
+            }
+            State::Scaling { target } => {
+                let here = transform.translation;
+                if grid.nearest_enemy(here, side, 2.4).is_some() {
+                    soldier.state = State::Fighting;
+                } else {
+                    let to = target - here;
+                    let horiz = Vec3::new(to.x, 0.0, to.z);
+                    if horiz.length() < 1.6 && (here.y - target.y).abs() < 1.4 {
+                        // Up on the wall-walk — go find a defender.
+                        soldier.state = State::Fighting;
+                    } else {
+                        let step = horiz.normalize_or_zero() * WALK_SPEED * 0.8 * dt;
+                        transform.translation += step;
+                        let feet = transform.translation.y - 0.85;
+                        transform.translation.y =
+                            ground_under(&spatial, &bodies, transform.translation, feet) + 0.85;
+                        if step.length_squared() > 0.0 {
+                            transform.rotation = Quat::from_rotation_y((-step.x).atan2(-step.z));
+                        }
+                    }
                 }
             }
             State::Holding => {
@@ -526,14 +675,14 @@ fn soldier_ai(
                     continue;
                 }
                 if let Some((_, target_pos, d)) =
-                    nearest_enemy(&snapshot, transform.translation, side, 95.0)
+                    nearest_enemy(&snapshot, transform.translation, side, 135.0)
                 {
                     let to = target_pos - transform.translation;
                     transform.rotation = Quat::from_rotation_y((-to.x).atan2(-to.z));
                     if d < 2.4 * 2.4 {
                         soldier.state = State::Fighting;
                     } else if archer && soldier.cooldown <= 0.0 {
-                        soldier.cooldown = 2.8 + soldier.seed * 2.2;
+                        soldier.cooldown = 2.4 + soldier.seed * 1.8;
                         loose_arrow(&mut commands, &assets, transform.translation, target_pos, side);
                     }
                 }

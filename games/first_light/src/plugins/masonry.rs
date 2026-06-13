@@ -146,8 +146,32 @@ pub struct FragmentCounter {
 pub struct MasonryAssets {
     pub cube: Handle<Mesh>,
     pub chiseled: Vec<Handle<Mesh>>,
+    /// Trapezoidal voussoir for tower rings: wider on the outer face so
+    /// blocks tile a circle tightly (smooth curve, no radial gaps).
+    pub wedge: Handle<Mesh>,
     pub tints: Vec<Handle<StandardMaterial>>,
     pub cracked: Vec<Handle<StandardMaterial>>,
+}
+
+/// A unit voussoir: a cuboid deformed so its inner face (+Z, toward the
+/// tower axis) is narrow and its outer face (-Z) is wide, matched to how
+/// `ring_tower` orients blocks. Tiling these around a circle leaves no
+/// radial gaps and reads as a hewn, fitted curve.
+fn wedge_block() -> Mesh {
+    let mut mesh: Mesh = Cuboid::new(1.0, 1.0, 1.0).into();
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        for p in positions.iter_mut() {
+            // Inner (z>0) narrows, outer (z<0) widens past 1 so neighbors
+            // overlap and seams disappear; slight corner jitter for hewn feel.
+            let taper = if p[2] > 0.0 { 0.58 } else { 1.34 };
+            p[0] *= taper;
+        }
+    }
+    mesh.duplicate_vertices();
+    mesh.compute_flat_normals();
+    mesh
 }
 
 /// A unit cube whose corners are jittered (consistently across the faces
@@ -224,6 +248,7 @@ pub fn setup_masonry_assets(
     commands.insert_resource(MasonryAssets {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         chiseled: (0..6).map(|seed| meshes.add(chiseled_cube(seed))).collect(),
+        wedge: meshes.add(wedge_block()),
         tints,
         cracked,
     });
@@ -302,9 +327,32 @@ pub fn spawn_block(
     rotation: Quat,
     size: Vec3,
 ) -> Entity {
+    let mesh = assets.chiseled[tint_index(pos + Vec3::splat(7.7), assets.chiseled.len())].clone();
+    spawn_shaped(commands, assets, mesh, pos, rotation, size)
+}
+
+/// Spawns a voussoir (wedge) block — for tower rings and arches.
+pub fn spawn_wedge(
+    commands: &mut Commands,
+    assets: &MasonryAssets,
+    pos: Vec3,
+    rotation: Quat,
+    size: Vec3,
+) -> Entity {
+    spawn_shaped(commands, assets, assets.wedge.clone(), pos, rotation, size)
+}
+
+fn spawn_shaped(
+    commands: &mut Commands,
+    assets: &MasonryAssets,
+    mesh: Handle<Mesh>,
+    pos: Vec3,
+    rotation: Quat,
+    size: Vec3,
+) -> Entity {
     commands
         .spawn((
-            Mesh3d(assets.chiseled[tint_index(pos + Vec3::splat(7.7), assets.chiseled.len())].clone()),
+            Mesh3d(mesh),
             MeshMaterial3d(assets.tints[tint_index(pos, assets.tints.len())].clone()),
             Transform::from_translation(pos)
                 .with_rotation(rotation)
