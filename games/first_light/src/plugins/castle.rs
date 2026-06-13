@@ -132,6 +132,103 @@ pub fn defender_posts() -> Vec<(Vec3, bool)> {
     posts
 }
 
+/// Navigation data for one manned tower: where soldiers enter at the bailey,
+/// the platform center, and the spiral-stair path between them. Pure and
+/// deterministic so both the castle geometry and the attacker AI use the
+/// exact same staircase.
+pub struct TowerNav {
+    pub base: Vec3,
+    pub top: Vec3,
+    pub spiral: Vec<Vec3>,
+}
+
+fn ring_top(h: f32) -> f32 {
+    (h / 0.75_f32).round() * 0.75
+}
+
+/// The manned towers (center, radius, shaft height, outward direction).
+fn manned_towers() -> Vec<(Vec3, f32, f32, Vec3)> {
+    let o = Vec3::new(CASTLE_CENTER.x, TERRACE_HEIGHT, CASTLE_CENTER.y);
+    let mut t = Vec::new();
+    for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        t.push((o + Vec3::new(sx * WALL_HALF_X, 0.0, sz * WALL_HALF_Z), CORNER_TOWER_R, 19.0, Vec3::new(sx, 0.0, sz)));
+    }
+    t.push((o + Vec3::new(0.0, 0.0, -WALL_HALF_Z), MURAL_TOWER_R, 16.0, Vec3::NEG_Z));
+    t.push((o + Vec3::new(-WALL_HALF_X, 0.0, 0.0), MURAL_TOWER_R, 16.0, Vec3::NEG_X));
+    t.push((o + Vec3::new(WALL_HALF_X, 0.0, 0.0), MURAL_TOWER_R, 16.0, Vec3::X));
+    for sx in [-1.0_f32, 1.0] {
+        t.push((o + Vec3::new(sx * (GATE_HALF_WIDTH + 2.6), 0.0, WALL_HALF_Z + 1.2), 4.0, 18.0, Vec3::Z));
+    }
+    t
+}
+
+/// The climb polyline up a tower's spiral: a bailey approach point at the
+/// door, then helical tread centers rising to the platform.
+fn spiral_points(center: Vec3, radius: f32, top_y: f32, door_angle: f32) -> Vec<Vec3> {
+    let rm = (radius - 1.2).max(0.7);
+    let rise = 0.42;
+    // Angular step sized so consecutive ~1.2 m treads touch (no gaps).
+    let dtheta = 1.05 / rm;
+    let n = (top_y / rise).ceil().max(2.0) as usize;
+    let mut pts = Vec::with_capacity(n + 2);
+    // Approach: just outside the doorway, on the ground.
+    pts.push(center + Vec3::new(door_angle.cos() * (radius + 1.2), 0.0, door_angle.sin() * (radius + 1.2)));
+    for i in 0..=n {
+        let ang = door_angle + i as f32 * dtheta;
+        let y = (i as f32 * rise).min(top_y);
+        pts.push(center + Vec3::new(ang.cos() * rm, y, ang.sin() * rm));
+    }
+    pts.push(center + Vec3::Y * top_y); // platform center
+    pts
+}
+
+/// Builds the physical spiral stair from a tower's nav path: a central newel
+/// post and a contiguous run of stone treads the climb path rides on.
+fn build_spiral(commands: &mut Commands, assets: &MasonryAssets, nav: &TowerNav) {
+    let center = Vec3::new(nav.top.x, TERRACE_HEIGHT, nav.top.z);
+    let top_y = nav.top.y - TERRACE_HEIGHT;
+    // Central newel post.
+    spawn_block(
+        commands,
+        assets,
+        center + Vec3::Y * (top_y / 2.0),
+        Quat::IDENTITY,
+        Vec3::new(0.9, top_y, 0.9),
+    );
+    let pts = &nav.spiral;
+    for p in &pts[1..pts.len() - 1] {
+        let rdir = Vec3::new(p.x - center.x, 0.0, p.z - center.z).normalize_or_zero();
+        if rdir == Vec3::ZERO {
+            continue;
+        }
+        spawn_block(
+            commands,
+            assets,
+            Vec3::new(p.x, p.y - 0.18, p.z),
+            Quat::from_rotation_arc(Vec3::Z, rdir),
+            Vec3::new(1.2, 0.34, 1.9),
+        );
+    }
+}
+
+/// Spiral-stair navigation for every manned tower (shared by geometry + AI).
+pub fn tower_navs() -> Vec<TowerNav> {
+    manned_towers()
+        .into_iter()
+        .map(|(center, r, h, out)| {
+            let top_y = ring_top(h);
+            let inward = -Vec3::new(out.x, 0.0, out.z).normalize_or_zero();
+            let door_angle = inward.z.atan2(inward.x);
+            let spiral = spiral_points(center, r, top_y, door_angle);
+            TowerNav {
+                base: spiral[0],
+                top: center + Vec3::Y * top_y,
+                spiral,
+            }
+        })
+        .collect()
+}
+
 #[derive(Resource)]
 struct CastleAssets {
     cone: Handle<Mesh>,
@@ -224,30 +321,15 @@ fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res
         merlons(c, ma, o + Vec3::new(sx * (gate_clear + front_len / 2.0), wall_top, WALL_HALF_Z + WALL_THICKNESS / 2.0 - 0.2), Vec3::X, front_len - 1.5);
     }
 
-    // --- Corner towers (open fighting platforms) ------------------------------
-    for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        let base = o + Vec3::new(sx * WALL_HALF_X, 0.0, sz * WALL_HALF_Z);
-        let top = ring_tower(c, ma, ca, base, CORNER_TOWER_R, 19.0, Vec3::new(sx, 0.0, sz));
-        tower_platform(c, ma, base, CORNER_TOWER_R, top);
-        // Stair from the wall-walk up onto the platform.
-        straight_stair(c, ma, base + Vec3::new(-sx * (CORNER_TOWER_R - 1.0), wall_top, 0.0), Vec3::new(sx, 0.0, 0.0), CORNER_TOWER_R * 1.6, top - wall_top, 2.0);
+    // --- Manned towers: voussoir shafts, doorways, open fighting platforms,
+    // and an internal spiral stair (built from the shared nav path) ------------
+    for (center, radius, height, out) in manned_towers() {
+        let inward = -Vec3::new(out.x, 0.0, out.z).normalize_or_zero();
+        let top = ring_tower(c, ma, ca, center, radius, height, out, inward);
+        tower_platform(c, ma, center, radius, top);
     }
-    // --- Mural towers -----------------------------------------------------------
-    for (base, out) in [
-        (o + Vec3::new(0.0, 0.0, -WALL_HALF_Z), Vec3::NEG_Z),
-        (o + Vec3::new(-WALL_HALF_X, 0.0, 0.0), Vec3::NEG_X),
-        (o + Vec3::new(WALL_HALF_X, 0.0, 0.0), Vec3::X),
-    ] {
-        let top = ring_tower(c, ma, ca, base, MURAL_TOWER_R, 16.0, out);
-        tower_platform(c, ma, base, MURAL_TOWER_R, top);
-        straight_stair(c, ma, base - out * (MURAL_TOWER_R - 0.8) + Vec3::Y * wall_top, out, MURAL_TOWER_R * 1.8, top - wall_top, 1.8);
-    }
-
-    // --- Gatehouse (open platforms over the gate) -------------------------------
-    for sx in [-1.0_f32, 1.0] {
-        let base = o + Vec3::new(sx * (GATE_HALF_WIDTH + 2.6), 0.0, WALL_HALF_Z + 1.2);
-        let top = ring_tower(c, ma, ca, base, 4.0, 18.0, Vec3::Z);
-        tower_platform(c, ma, base, 4.0, top);
+    for nav in tower_navs() {
+        build_spiral(c, ma, &nav);
     }
     // Gate lintel (3 courses spanning the opening) and the closed gate.
     lintel(c, ma, o + Vec3::new(0.0, 9.6, WALL_HALF_Z), GATE_HALF_WIDTH - 0.8, WALL_THICKNESS, 4);
@@ -257,7 +339,7 @@ fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res
     let barbican_z = WALL_HALF_Z + 14.0;
     for sx in [-1.0_f32, 1.0] {
         let base = o + Vec3::new(sx * (GATE_HALF_WIDTH + 1.4), 0.0, barbican_z);
-        let top = ring_tower(c, ma, ca, base, 2.8, 11.0, Vec3::Z);
+        let top = ring_tower(c, ma, ca, base, 2.8, 11.0, Vec3::Z, Vec3::ZERO);
         tower_platform(c, ma, base, 2.8, top);
         // Flank walls connecting back toward the gatehouse.
         wall_run(c, ma, o + Vec3::new(sx * 6.6, 0.0, WALL_HALF_Z + 5.6), Vec3::Z, barbican_z - WALL_HALF_Z - 8.6, 7.0, 1.6);
@@ -297,7 +379,7 @@ fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res
     merlons(c, ma, keep + Vec3::new(-kx + 0.5, keep_top, 0.0), Vec3::Z, kz * 2.0 - 3.0);
     for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         let base = keep + Vec3::new(sx * (kx - 1.5), keep_top, sz * (kz - 1.5));
-        let top = ring_tower(c, ma, ca, base, 2.2, 12.0, Vec3::new(sx, 0.0, sz));
+        let top = ring_tower(c, ma, ca, base, 2.2, 12.0, Vec3::new(sx, 0.0, sz), Vec3::ZERO);
         roof_cone(c, ma, ca, base + Vec3::Y * top, 2.0 * (2.2 + 0.8), 5.0, false);
     }
 
@@ -333,7 +415,7 @@ fn spawn_castle(mut commands: Commands, masonry: Res<MasonryAssets>, castle: Res
     wood_slab(c, ma, ca, stables + Vec3::Y * (course_top(4.5) + 0.4), Vec3::new(8.6, 0.8, 12.6));
 
     // Courtyard well.
-    ring_tower(c, ma, ca, o + Vec3::new(12.0, 0.0, 16.0), 1.4, 1.4, Vec3::Z);
+    ring_tower(c, ma, ca, o + Vec3::new(12.0, 0.0, 16.0), 1.4, 1.4, Vec3::Z, Vec3::ZERO);
 
     // --- Torches: barbican, gate, courtyard, keep door ---------------------------
     for pos in [
@@ -504,12 +586,14 @@ fn ring_tower(
     radius: f32,
     height: f32,
     outward: Vec3,
+    door: Vec3,
 ) -> f32 {
     const ROW_H: f32 = 0.75;
     const ARC: f32 = 1.35;
     let radial = 1.4_f32.min(radius * 0.7);
     let rows = (height / ROW_H).round() as usize;
     let out = Vec3::new(outward.x, 0.0, outward.z).normalize_or_zero();
+    let door = Vec3::new(door.x, 0.0, door.z).normalize_or_zero();
     // Two bands of arrowslits up the field-facing arc.
     let slit_rows = [rows / 3, rows / 3 + 1, rows * 2 / 3, rows * 2 / 3 + 1];
     for row in 0..rows {
@@ -529,6 +613,11 @@ fn ring_tower(
         for k in 0..n {
             let angle = (k as f32 + offset) / n as f32 * TAU;
             let dir = Vec3::new(angle.cos(), 0.0, angle.sin());
+            // Arched doorway: skip the lowest courses on the door-facing arc
+            // so the internal spiral stair has an entrance.
+            if row < 7 && door != Vec3::ZERO && dir.dot(door) > 0.80 {
+                continue;
+            }
             let pos = base + Vec3::new(dir.x * r_mid, y, dir.z * r_mid);
             let rot = Quat::from_rotation_y(-(angle + std::f32::consts::FRAC_PI_2));
             let block = spawn_wedge(

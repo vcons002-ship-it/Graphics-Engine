@@ -30,6 +30,7 @@ impl Plugin for SoldiersPlugin {
         app.add_message::<BlastEvent>()
             .init_resource::<Battle>()
             .init_resource::<BattleGrid>()
+            .insert_resource(CastleNav(castle::tower_navs()))
             .add_systems(Startup, (setup_soldier_assets, spawn_armies).chain())
             .add_systems(
                 Update,
@@ -72,10 +73,14 @@ pub enum Side {
 
 #[derive(Clone, Copy, PartialEq)]
 enum State {
-    /// Attackers advancing on the castle.
+    /// Attackers advancing on the castle along the assault route.
     Marching { waypoint: usize },
     /// Climbing a planted ladder up onto the wall-walk.
     Scaling { target: Vec3 },
+    /// Inside the breached castle, swarming toward the nearest enemy.
+    Hunting,
+    /// Climbing a tower's spiral stair to reach the archers on top.
+    ClimbSpiral { tower: usize, step: usize },
     /// Defenders at their station.
     Holding,
     /// Trading blows with a nearby enemy.
@@ -83,6 +88,10 @@ enum State {
     /// Down; despawns after the timer.
     Dead { timer: f32, ragdoll: bool },
 }
+
+/// Cached spiral-stair navigation for the castle's manned towers.
+#[derive(Resource)]
+struct CastleNav(Vec<castle::TowerNav>);
 
 #[derive(Component)]
 struct Soldier {
@@ -441,6 +450,27 @@ fn nearest_enemy(
 const WALK_SPEED: f32 = 3.1;
 /// Within this distance of the castle, soldiers follow real geometry.
 const CASTLE_NEAR: f32 = 80.0;
+
+/// Steers a soldier horizontally toward `target` and snaps to the surface
+/// underfoot (so they climb whatever stairs/treads/ramps are there).
+fn walk_toward(
+    transform: &mut Transform,
+    spatial: &SpatialQuery,
+    bodies: &Query<&RigidBody>,
+    target: Vec3,
+    speed: f32,
+    dt: f32,
+) {
+    let mut to = target - transform.translation;
+    to.y = 0.0;
+    let step = to.normalize_or_zero() * speed * dt;
+    transform.translation += step;
+    let feet = transform.translation.y - 0.85;
+    transform.translation.y = ground_under(spatial, bodies, transform.translation, feet) + 0.85;
+    if step.length_squared() > 0.0 {
+        transform.rotation = Quat::from_rotation_y((-step.x).atan2(-step.z));
+    }
+}
 /// Ladder foot distance out from the wall face.
 const LADDER_RUN: f32 = 5.6;
 
@@ -495,6 +525,7 @@ fn soldier_ai(
     time: Res<Time>,
     spatial: SpatialQuery,
     grid: Res<BattleGrid>,
+    nav: Res<CastleNav>,
     assets: Res<SoldierAssets>,
     mut sounds: MessageWriter<SoundEvent>,
     mut soldiers: Query<(Entity, &mut Soldier, &mut Transform)>,
@@ -599,7 +630,8 @@ fn soldier_ai(
                     } else if next < route.len() {
                         soldier.state = State::Marching { waypoint: next };
                     } else {
-                        soldier.state = State::Fighting;
+                        // Through the breach: swarm the bailey hunting foes.
+                        soldier.state = State::Hunting;
                     }
                 } else {
                     // Separation: ease away from packed neighbors so the
@@ -666,6 +698,58 @@ fn soldier_ai(
                     }
                 }
             }
+            State::Hunting => {
+                let here = transform.translation;
+                if grid.nearest_enemy(here, side, 2.4).is_some() {
+                    soldier.state = State::Fighting;
+                } else if let Some((_, target_pos, _)) = nearest_enemy(&snapshot, here, side, 70.0) {
+                    if target_pos.y > here.y + 2.5 {
+                        // Foe up on a tower/wall: head for the nearest tower
+                        // and climb its spiral stair to reach the archers.
+                        let mut best = (f32::MAX, 0usize);
+                        for (i, tn) in nav.0.iter().enumerate() {
+                            let d = tn.top.distance_squared(target_pos);
+                            if d < best.0 {
+                                best = (d, i);
+                            }
+                        }
+                        let tower = best.1;
+                        let base = nav.0[tower].base;
+                        if Vec2::new(here.x, here.z).distance(Vec2::new(base.x, base.z)) < 2.0 {
+                            soldier.state = State::ClimbSpiral { tower, step: 1 };
+                        } else {
+                            walk_toward(&mut transform, &spatial, &bodies, base, WALK_SPEED, dt);
+                        }
+                    } else {
+                        walk_toward(&mut transform, &spatial, &bodies, target_pos, WALK_SPEED, dt);
+                    }
+                } else {
+                    // No foe in sight: drift toward the keep at the castle heart.
+                    let o = Vec3::new(CASTLE_CENTER.x, TERRACE_HEIGHT, CASTLE_CENTER.y);
+                    walk_toward(&mut transform, &spatial, &bodies, o, WALK_SPEED * 0.7, dt);
+                }
+            }
+            State::ClimbSpiral { tower, step } => {
+                let here = transform.translation;
+                if grid.nearest_enemy(here, side, 2.4).is_some() {
+                    soldier.state = State::Fighting;
+                } else {
+                    let path = &nav.0[tower].spiral;
+                    let idx = step.min(path.len() - 1);
+                    let target = path[idx];
+                    let horiz = Vec2::new(target.x - here.x, target.z - here.z).length();
+                    if horiz < 1.4 && (here.y - target.y).abs() < 1.2 {
+                        let next = step + 1;
+                        if next >= path.len() {
+                            soldier.state = State::Hunting; // up on the platform
+                        } else {
+                            soldier.state = State::ClimbSpiral { tower, step: next };
+                        }
+                    } else {
+                        walk_toward(&mut transform, &spatial, &bodies, target, WALK_SPEED * 0.85, dt);
+                    }
+                }
+            }
             State::Holding => {
                 // Snap to post (defenders stand on masonry, not terrain).
                 transform.translation = soldier.post;
@@ -706,7 +790,7 @@ fn soldier_ai(
                     }
                     None => {
                         soldier.state = match side {
-                            Side::Attacker => State::Marching { waypoint: 4 },
+                            Side::Attacker => State::Hunting,
                             Side::Defender => State::Holding,
                         };
                     }
