@@ -39,7 +39,20 @@ impl Plugin for CastlePlugin {
                 .chain()
                 .after(masonry::setup_masonry_assets),
         )
-        .add_systems(Update, spawn_castle.run_if(on_message::<RestartRequested>));
+        .add_systems(Update, spawn_castle.run_if(on_message::<RestartRequested>))
+        .add_systems(Update, wave_banner);
+    }
+}
+
+/// The cloth flag on the great tower; flutters in the wind.
+#[derive(Component)]
+struct Banner;
+
+fn wave_banner(time: Res<Time>, mut banners: Query<&mut Transform, With<Banner>>) {
+    let t = time.elapsed_secs();
+    for mut transform in &mut banners {
+        let flutter = (t * 3.5).sin() * 0.25 + (t * 6.1).sin() * 0.08;
+        transform.rotation = Quat::from_rotation_y(flutter);
     }
 }
 
@@ -889,6 +902,7 @@ fn roof_cone(
                 Transform::from_xyz(0.0, 0.75, 0.0).with_scale(Vec3::new(0.02, 0.6, 0.02)),
             ));
             r.spawn((
+                Banner,
                 Mesh3d(masonry.cube.clone()),
                 MeshMaterial3d(castle.banner.clone()),
                 Transform::from_xyz(0.08, 0.95, 0.0).with_scale(Vec3::new(0.18, 0.18, 0.012)),
