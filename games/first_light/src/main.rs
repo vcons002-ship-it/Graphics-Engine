@@ -27,6 +27,7 @@ fn main() {
             plugins::masonry::MasonryPlugin,
             plugins::castle::CastlePlugin,
             plugins::vegetation::VegetationPlugin,
+            plugins::grass::GrassPlugin,
             plugins::world::WorldPlugin,
             plugins::props::PropsPlugin,
             plugins::soldiers::SoldiersPlugin,
