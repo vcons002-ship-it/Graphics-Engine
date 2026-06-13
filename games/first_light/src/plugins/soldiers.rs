@@ -15,6 +15,7 @@
 use avian3d::math::AdjustPrecision;
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use std::f32::consts::{PI, TAU};
 
 use super::audio::{SoundEvent, SoundKind};
 use super::castle::{self, gate_passage};
@@ -45,6 +46,7 @@ impl Plugin for SoldiersPlugin {
                     .chain()
                     .run_if(in_state(MenuState::Closed)),
             )
+            .add_systems(Update, animate_limbs.run_if(in_state(MenuState::Closed)))
             .add_systems(
                 Update,
                 (reset_battle, spawn_armies)
@@ -215,6 +217,9 @@ struct SoldierAssets {
     shield: Handle<Mesh>,
     arrow: Handle<Mesh>,
     plank: Handle<Mesh>,
+    leg: Handle<Mesh>,
+    arm: Handle<Mesh>,
+    trouser: Handle<StandardMaterial>,
     attacker_tunics: Vec<Handle<StandardMaterial>>,
     defender_tunics: Vec<Handle<StandardMaterial>>,
     skin: Handle<StandardMaterial>,
@@ -245,6 +250,8 @@ fn setup_soldier_assets(
         shield: meshes.add(Cuboid::new(0.45, 0.62, 0.07)),
         arrow: meshes.add(Cuboid::new(0.03, 0.03, 0.6)),
         plank: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        leg: meshes.add(Capsule3d::new(0.1, 0.5)),
+        arm: meshes.add(Capsule3d::new(0.075, 0.42)),
         attacker_tunics: [
             Color::srgb(0.55, 0.10, 0.10),
             Color::srgb(0.48, 0.13, 0.08),
@@ -267,7 +274,17 @@ fn setup_soldier_assets(
             ..default()
         }),
         wood: tunic(&mut materials, Color::srgb(0.35, 0.24, 0.13)),
+        trouser: tunic(&mut materials, Color::srgb(0.18, 0.16, 0.14)),
     });
+}
+
+/// A limb that swings in the walk/attack animation. `side` is +1/-1 (left/
+/// right), `arm` distinguishes arms from legs (opposite phase). The entity
+/// is the pivot at the hip/shoulder; its mesh hangs below.
+#[derive(Component)]
+struct Limb {
+    side: f32,
+    arm: bool,
 }
 
 fn hash01(seed: u64) -> f32 {
@@ -364,6 +381,30 @@ fn spawn_soldier(
                     Transform::from_xyz(-0.34, 0.2, 0.12),
                 ));
             }
+            // Legs and arms: pivot at the hip/shoulder, mesh hangs below, so
+            // rotating the pivot swings the limb in the walk/attack cycle.
+            for side in [-1.0_f32, 1.0] {
+                s.spawn((
+                    Limb { side, arm: false },
+                    Transform::from_xyz(side * 0.13, -0.22, 0.0),
+                    Visibility::default(),
+                    children![(
+                        Mesh3d(assets.leg.clone()),
+                        MeshMaterial3d(assets.trouser.clone()),
+                        Transform::from_xyz(0.0, -0.35, 0.0),
+                    )],
+                ));
+                s.spawn((
+                    Limb { side, arm: true },
+                    Transform::from_xyz(side * 0.30, 0.38, 0.0),
+                    Visibility::default(),
+                    children![(
+                        Mesh3d(assets.arm.clone()),
+                        MeshMaterial3d(assets.skin.clone()),
+                        Transform::from_xyz(0.0, -0.3, 0.0),
+                    )],
+                ));
+            }
         })
         .id();
 
@@ -435,6 +476,50 @@ fn spawn_armies(mut commands: Commands, assets: Res<SoldierAssets>) {
 
 fn reset_battle(mut battle: ResMut<Battle>) {
     *battle = Battle::default();
+}
+
+/// Only soldiers within this distance of the camera get animated limbs.
+const ANIM_DIST: f32 = 75.0;
+
+/// Swings limbs for nearby soldiers: a walk cycle while moving, an arm chop
+/// while fighting, slack when dead. Far soldiers keep their static pose, so
+/// the cost stays bounded regardless of army size.
+fn animate_limbs(
+    time: Res<Time>,
+    cameras: Query<&GlobalTransform, With<MainCamera>>,
+    soldiers: Query<(&Soldier, &Children, &Transform)>,
+    mut limbs: Query<(&Limb, &mut Transform), Without<Soldier>>,
+) {
+    let Ok(cam) = cameras.single() else {
+        return;
+    };
+    let cam_pos = cam.translation();
+    let t = time.elapsed_secs();
+    let near_sq = ANIM_DIST * ANIM_DIST;
+    for (soldier, children, transform) in &soldiers {
+        if transform.translation.distance_squared(cam_pos) > near_sq {
+            continue;
+        }
+        let phase = t * 8.0 + soldier.seed * TAU;
+        for child in children.iter() {
+            let Ok((limb, mut lt)) = limbs.get_mut(child) else {
+                continue;
+            };
+            let swing = match soldier.state {
+                State::Marching { .. }
+                | State::Hunting
+                | State::ClimbSpiral { .. }
+                | State::Scaling { .. } => {
+                    let amp = if limb.arm { 0.7 } else { 0.95 };
+                    (phase + if limb.arm { PI } else { 0.0 }).sin() * limb.side * amp
+                }
+                State::Fighting if limb.arm => (t * 9.0 + soldier.seed * TAU).sin().max(0.0) * 1.2,
+                State::Dead { .. } => 0.0,
+                _ => 0.0,
+            };
+            lt.rotation = Quat::from_rotation_x(swing);
+        }
+    }
 }
 
 fn rebuild_grid(mut grid: ResMut<BattleGrid>, soldiers: Query<(Entity, &Soldier, &Transform)>) {
