@@ -1,5 +1,29 @@
 # DEVLOG
 
+## Entry #11 — 2026-06-13 — Spiral stairs and the attacker swarm
+
+- **Spiral staircases** inside every manned tower: a doorway is cut in the
+  shaft's bailey-facing base (`ring_tower` skips those voussoirs), a central
+  newel post rises to the platform, and a contiguous helix of stone treads
+  (angular step sized so ~1.2 m treads touch — no gaps to fall through)
+  climbs around it. A pure `castle::tower_navs()` generates the climb path,
+  and `build_spiral` lays the geometry from that same path, so steps and
+  navigation can't drift apart.
+- **Attacker swarm**: through the breached gate (or off a ladder) attackers
+  enter `Hunting` — seek the nearest foe in 3D; chase a ground-level enemy
+  directly, or for one up on a tower/wall route to the nearest tower base
+  and `ClimbSpiral` up the helix tread by tread (geometry-following keeps
+  them on the steps) to engage the archers on the platform.
+- Cached the spiral paths in a `CastleNav` resource; shared `walk_toward`
+  locomotion helper.
+
+Verified (FL_AUTO_FIRE siege, FL_BATTLE_LOG): the trebuchet broke the gate,
+the lead element pushed to z=-174 inside the walls, and defenders fell
+182 -> ~84 as the courtyard was overrun — no panic. The elevated wall-walk
+and tower archers are the last holdouts (towers do their job); fully
+clearing them via the spirals is slow and is the next tuning target.
+
+
 ## Entry #10 — 2026-06-13 — Castle defences: gate, voussoirs, stairs, ladders
 
 Playtest gaps fixed across architecture and battle AI.
