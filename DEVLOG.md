@@ -1,5 +1,39 @@
 # DEVLOG
 
+## Entry #14 — 2026-06-14 — Destructible trebuchet stones
+
+Trebuchet stones can now crack and shatter when they smash into resisting
+masonry with enough force, instead of being indestructible.
+
+- **`BrittleStone` component** (`masonry.rs`): integrity in joules, plus the
+  cracked material and a radius. The trebuchet attaches it to the stone at
+  release (`STONE_INTEGRITY = 800 kJ`).
+- **Self-damage model** (in `projectile_impacts`): the stone takes damage
+  equal to the kinetic energy it actually *shed* in the collision —
+  `0.5·m·(v_pre² − v_post²)` from `PreTickVelocity` vs. the solver's
+  post-impact `LinearVelocity` — scaled by how much intact masonry backs the
+  hit (`hardness = clamp(blocks_in_radius / 10, 0.2, 1.0)`) and by
+  `STONE_SELF_FRACTION = 0.20`. So a head-on smash into a thick, well-backed
+  wall cracks (50% integrity, material swap) and shatters (≤0) it, while a
+  graze, a soft field landing, or punching a weak spot leaves it whole. The
+  logic only runs on masonry impacts, so the stone never breaks on dirt.
+- **Shatter** reuses the masonry rubble pipeline: `shatter_stone` spawns 8
+  granite chunks that inherit the post-impact velocity and spray outward as
+  `Fragment`s (so the existing budget recycles them), with a `RockCrack`
+  sound, a screen-shake bump, and the stone despawned.
+- **Chase camera**: when the followed stone shatters (its entity despawns),
+  the trebuchet camera now lingers on the impact spot for ~3 s
+  (`ShotCamera.last_pos`) instead of cutting straight back to the aim view.
+- Plumbing: bundled two of `projectile_impacts`' resources into an
+  `ImpactOut` `SystemParam` to stay under Bevy's 16-parameter system limit
+  after adding the `BrittleStone` query.
+- Verified headless (logs; the shard moment is too brief to screenshot at
+  ~0.5 fps under lavapipe): a 49–50 m/s hit on a 110+-block wall section
+  shatters the stone in one tick (~0.81–0.88 MJ self-damage), fragments
+  spawn, the stone despawns with no panic; under a lower self-fraction the
+  same hit only cracked, confirming the gradient. Tuning lives in
+  `STONE_INTEGRITY` and `STONE_SELF_FRACTION`.
+
 ## Entry #13 — 2026-06-14 — Full-map GPU shader grass
 
 The Entry #12 grass (14k CPU-swayed tufts over a limited region) read as

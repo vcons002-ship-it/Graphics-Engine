@@ -31,6 +31,7 @@
 
 use avian3d::prelude::*;
 use bevy::ecs::query::Has;
+use bevy::ecs::system::SystemParam;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -113,6 +114,36 @@ struct DustMote {
 /// cubes). Must also carry `CollisionEventsEnabled`.
 #[derive(Component)]
 pub struct Projectile;
+
+/// A projectile that can itself crack and shatter when it slams into
+/// resisting masonry with enough force — e.g. a trebuchet stone smashing
+/// head-on into a strong, intact wall. The stone cracks (material swap) at
+/// half integrity and breaks into fragments at zero. Glancing blows, soft
+/// field landings, and punching through already-weak masonry leave it whole.
+#[derive(Component)]
+pub struct BrittleStone {
+    pub integrity: f32,
+    pub max_integrity: f32,
+    pub radius: f32,
+    /// Material swapped in when the stone cracks; also dresses the shards.
+    pub cracked: Handle<StandardMaterial>,
+    pub cracked_applied: bool,
+}
+
+/// Fraction of the energy a brittle projectile sheds in an impact that goes
+/// into cracking the projectile itself. The rest is the masonry's problem.
+/// Tuned so a hard, well-backed wall hit breaks the stone within a hit or
+/// two, while grazes and moderate strikes only crack it.
+const STONE_SELF_FRACTION: f32 = 0.20;
+
+/// Bundles two impact outputs so `projectile_impacts` stays under Bevy's
+/// 16-parameter system limit.
+#[derive(SystemParam)]
+struct ImpactOut<'w> {
+    shake: ResMut<'w, ImpactShake>,
+    blasts: MessageWriter<'w, BlastEvent>,
+}
+
 
 /// Velocity captured before the physics step. `CollisionStart` events are
 /// emitted after the solver has already absorbed the impact, so reading
@@ -559,6 +590,57 @@ fn apply_damage(
     false
 }
 
+/// Breaks a brittle projectile into eight stone chunks that inherit its
+/// motion and spray outward, then leaves the original to be despawned.
+fn shatter_stone(
+    commands: &mut Commands,
+    assets: &MasonryAssets,
+    counter: &mut FragmentCounter,
+    sounds: &mut MessageWriter<SoundEvent>,
+    material: &Handle<StandardMaterial>,
+    transform: &Transform,
+    radius: f32,
+    velocity: Vec3,
+) {
+    let piece = radius * 0.62;
+    for ix in 0..2 {
+        for iy in 0..2 {
+            for iz in 0..2 {
+                let n = Vec3::new(ix as f32 - 0.5, iy as f32 - 0.5, iz as f32 - 0.5);
+                let local = n * radius;
+                counter.next_seq += 1;
+                let jitter = 0.8 + ((counter.next_seq * 37 % 23) as f32 / 23.0) * 0.3;
+                let spray = local.normalize_or_zero() * 3.0;
+                commands.spawn((
+                    Fragment(counter.next_seq),
+                    Mesh3d(assets.cube.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_translation(transform.translation + local)
+                        .with_rotation(transform.rotation)
+                        .with_scale(Vec3::splat(piece * jitter)),
+                    RigidBody::Dynamic,
+                    Collider::cuboid(1.0, 1.0, 1.0),
+                    ColliderDensity(STONE_DENSITY),
+                    Friction::new(0.8),
+                    Restitution::new(0.08),
+                    LinearVelocity((velocity + spray).into()),
+                    SleepThreshold {
+                        linear: 0.6,
+                        angular: 0.7,
+                    },
+                    TransformInterpolation,
+                    Respawnable,
+                ));
+            }
+        }
+    }
+    sounds.write(SoundEvent {
+        kind: SoundKind::RockCrack,
+        position: transform.translation,
+        intensity: 1.0,
+    });
+}
+
 /// Projectile strikes: kinetic energy is shared over blocks near the impact
 /// with linear falloff — the closest stones shatter, the next ring breaks
 /// loose, the outer ring cracks.
@@ -569,13 +651,13 @@ fn projectile_impacts(
     mut queue: ResMut<SupportQueue>,
     mut counter: ResMut<FragmentCounter>,
     mut tally: ResMut<DestructionTally>,
-    mut shake: ResMut<ImpactShake>,
+    mut out: ImpactOut,
     mut sounds: MessageWriter<SoundEvent>,
-    mut blasts: MessageWriter<BlastEvent>,
     assets: Res<MasonryAssets>,
     spatial: SpatialQuery,
     cones: Query<(), With<ConeShape>>,
-    projectiles: Query<(&PreTickVelocity, &ComputedMass), With<Projectile>>,
+    projectiles: Query<(&PreTickVelocity, &ComputedMass, &LinearVelocity), With<Projectile>>,
+    mut brittles: Query<&mut BrittleStone>,
     blocks: Query<(&Transform, &RigidBody), With<MasonryBlock>>,
     mut damageable: Query<(&mut MasonryBlock, Option<&LinearVelocity>)>,
     transforms: Query<&Transform>,
@@ -595,7 +677,7 @@ fn projectile_impacts(
         if !seen.insert(projectile) {
             continue;
         }
-        let Ok((velocity, mass)) = projectiles.get(projectile) else {
+        let Ok((velocity, mass, post_velocity)) = projectiles.get(projectile) else {
             continue;
         };
         let speed = velocity.0.length();
@@ -656,17 +738,57 @@ fn projectile_impacts(
             }
         }
         // Stone-on-stone weight: screen shake, dust, and a deep thud.
-        shake.0 = (shake.0 + (energy / 3.0e6).clamp(0.15, 1.0)).min(1.2);
+        out.shake.0 = (out.shake.0 + (energy / 3.0e6).clamp(0.15, 1.0)).min(1.2);
         spawn_dust(&mut commands, &assets, impact_at, energy);
         sounds.write(SoundEvent {
             kind: SoundKind::StoneImpact,
             position: impact_at,
             intensity: (energy / 4.0e6).clamp(0.25, 1.0),
         });
-        blasts.write(BlastEvent {
+        out.blasts.write(BlastEvent {
             position: impact_at,
             radius,
         });
+
+        // The stone itself can break. The energy it actually shed in the
+        // collision (pre-impact speed vs. the solver's post-impact speed) is
+        // the force it felt; scaled by how much intact masonry backed the
+        // hit, so a head-on smash into a thick, supported wall cracks or
+        // shatters it while clipping a lone merlon or punching a soft spot
+        // barely marks it.
+        if let Ok(mut brittle) = brittles.get_mut(projectile) {
+            let v_post = Vec3::new(post_velocity.x, post_velocity.y, post_velocity.z);
+            let ke_lost = (0.5 * mass.value() * (speed * speed - v_post.length_squared())).max(0.0);
+            let hardness = (hits.len() as f32 / 10.0).clamp(0.2, 1.0);
+            let self_damage = ke_lost * hardness * STONE_SELF_FRACTION;
+            brittle.integrity -= self_damage;
+
+            if brittle.integrity <= 0.0 {
+                if let Ok(stone) = transforms.get(projectile) {
+                    let stone = *stone;
+                    shatter_stone(
+                        &mut commands, &assets, &mut counter, &mut sounds, &brittle.cracked,
+                        &stone, brittle.radius, v_post,
+                    );
+                }
+                out.shake.0 = (out.shake.0 + 0.4).min(1.2);
+                commands.entity(projectile).try_despawn();
+                info!("trebuchet stone shattered ({self_damage:.0} J self-damage)");
+            } else if !brittle.cracked_applied
+                && brittle.integrity <= brittle.max_integrity * 0.5
+            {
+                brittle.cracked_applied = true;
+                commands
+                    .entity(projectile)
+                    .try_insert(MeshMaterial3d(brittle.cracked.clone()));
+                sounds.write(SoundEvent {
+                    kind: SoundKind::RockCrack,
+                    position: impact_at,
+                    intensity: 0.5,
+                });
+            }
+        }
+
         info!(
             "impact at {impact_at:.1}: {speed:.0} m/s, {energy:.0} J over {} blocks (r={radius:.1}), {shattered} shattered",
             hits.len()
