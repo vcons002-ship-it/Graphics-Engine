@@ -1,5 +1,40 @@
 # DEVLOG
 
+## Entry #13 — 2026-06-14 — Full-map GPU shader grass
+
+The Entry #12 grass (14k CPU-swayed tufts over a limited region) read as
+sparse from standing height. Replaced it with dense, full-map grass that
+sways entirely on the GPU.
+
+- **Geometry** (`grass.rs`): blades are scattered deterministically across
+  the whole grassy valley floor (region ±150 × −110..210, filtered by the
+  `grassy()` mask, the 0.1–40 m height band and slope `n.y > 0.88`) in
+  3-blade clumps at 0.6 m spacing, and baked **in world space** into one
+  merged mesh per 24 m chunk (~149 chunks, ~418k blades) so the renderer
+  frustum-culls them and the draw count stays tiny. Each vertex carries a
+  bend weight in `uv.y` (0 root → 1 tip), a per-blade phase in `uv.x`, and a
+  green shade with root-darkening AO in its vertex colour (so one white-base
+  material tints every blade — no per-shade material split).
+- **Wind shader** (`shaders/grass.wgsl` + `grass_prepass.wgsl`, both
+  embedded via `embedded_asset!` so no runtime asset path is needed): a
+  custom vertex shader layered on `StandardMaterial` through
+  `ExtendedMaterial<StandardMaterial, GrassWind>`. It mirrors bevy_pbr's mesh
+  vertex shader (non-skinned path) and adds a travelling wind offset weighted
+  by `bend²`, then hands off to the stock PBR fragment — so grass keeps full
+  shadows, atmosphere ambient and fog. Zero per-frame CPU per blade.
+- **Two gotchas, both fixed:** (1) the camera runs a depth/normal prepass
+  (SSAO + atmosphere need it), so the displacement had to be duplicated in a
+  prepass vertex shader or depth wouldn't match the forward pass. (2) The
+  prepass view layout does **not** expose the `globals` (time) binding —
+  reading `globals.time` there panicked with "group 0, binding 11 is not
+  available in the pipeline layout". Fixed by carrying time in the material's
+  own uniform (`params.z`, advanced each frame by `drive_wind`) instead of
+  `globals`, so both passes sway in lockstep off the same source.
+- Verified headless (Xvfb + lavapipe): dense carpet to the tree line with
+  per-blade sun-lit detail up close, no validation errors. Density/spacing
+  are consts (`SPACING`, `BLADES_PER_CLUMP`) to trade lushness vs. vertex
+  count; sway strength/speed live in the material uniform (`0.35 m`, `×1.0`).
+
 ## Entry #12 — 2026-06-13 — Graphics pass: trees, grass, soldiers, polish
 
 Four vertical slices, each screenshot-verified.
