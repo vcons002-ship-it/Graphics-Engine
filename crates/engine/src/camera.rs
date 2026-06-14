@@ -13,6 +13,7 @@ use bevy::pbr::ScreenSpaceAmbientOcclusion;
 use bevy::pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 
 /// Marker for the primary gameplay camera. Spawning this is all a game needs
 /// to do; rendering defaults are applied by [`CameraPlugin`].
@@ -52,6 +53,19 @@ fn apply_render_defaults(
             // `FogVolume`s; without one this is nearly free).
             VolumetricFog {
                 ambient_intensity: 0.08,
+                ..default()
+            },
+            // Cinematic grade: a touch warmer and richer than neutral.
+            ColorGrading {
+                global: ColorGradingGlobal {
+                    post_saturation: 1.12,
+                    temperature: 0.05,
+                    ..default()
+                },
+                midtones: ColorGradingSection {
+                    contrast: 1.05,
+                    ..default()
+                },
                 ..default()
             },
             Msaa::Off,

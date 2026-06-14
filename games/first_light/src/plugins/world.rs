@@ -41,13 +41,86 @@ impl Plugin for WorldPlugin {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .to_vec(),
         ))
-        .add_systems(Startup, (spawn_player_on_terrain, spawn_valley_fog))
+        .add_systems(Startup, (spawn_player_on_terrain, spawn_valley_fog, spawn_birds))
+        .add_systems(Update, fly_birds)
         .add_systems(
             Update,
             (despawn_respawnables, spawn_player_on_terrain)
                 .chain()
                 .run_if(on_message::<RestartRequested>),
         );
+    }
+}
+
+/// A bird wheeling high over the valley.
+#[derive(Component)]
+struct Bird {
+    center: Vec2,
+    radius: f32,
+    height: f32,
+    speed: f32,
+    phase: f32,
+}
+
+/// A simple swept-wing silhouette (one double-sided triangle).
+fn bird_mesh() -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::Indices;
+    use bevy::render::render_resource::PrimitiveTopology;
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![[0.0, 0.0, 0.35], [-0.6, 0.06, -0.2], [0.6, 0.06, -0.2]],
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 3])
+        .with_inserted_indices(Indices::U32(vec![0, 1, 2]))
+}
+
+fn spawn_birds(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let mesh = meshes.add(bird_mesh());
+    let material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.07, 0.07, 0.09),
+        perceptual_roughness: 1.0,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    });
+    for i in 0..18u32 {
+        let f = i as f32;
+        let phase = f * 0.7;
+        commands.spawn((
+            Bird {
+                center: Vec2::new(((f * 53.0).sin()) * 120.0, -70.0 + (f * 31.0).cos() * 90.0),
+                radius: 22.0 + (f * 17.0).sin().abs() * 30.0,
+                height: 72.0 + (f * 11.0).cos() * 14.0,
+                speed: 0.12 + (f * 7.0).sin().abs() * 0.08,
+                phase,
+            },
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_scale(Vec3::splat(2.6)),
+        ));
+    }
+}
+
+fn fly_birds(time: Res<Time>, mut birds: Query<(&Bird, &mut Transform)>) {
+    let t = time.elapsed_secs();
+    for (bird, mut transform) in &mut birds {
+        let a = t * bird.speed + bird.phase;
+        transform.translation = Vec3::new(
+            bird.center.x + a.cos() * bird.radius,
+            bird.height + (t * 1.3 + bird.phase).sin() * 2.5,
+            bird.center.y + a.sin() * bird.radius,
+        );
+        // Face the direction of travel, with a gentle wing-bank flap.
+        let yaw = (a.cos()).atan2(-a.sin());
+        let bank = (t * 5.0 + bird.phase).sin() * 0.25;
+        transform.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(bank);
+        transform.scale = Vec3::splat(2.6);
     }
 }
 

@@ -16,7 +16,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::audio::{SoundEvent, SoundKind};
-use super::masonry::{PreTickVelocity, Projectile};
+use super::masonry::{BrittleStone, PreTickVelocity, Projectile};
 use super::terrain::{CASTLE_CENTER, KNOLL_CENTER, terrain_height};
 use super::world::Respawnable;
 use engine::prelude::*;
@@ -102,6 +102,9 @@ struct ShotCamera {
     following: Option<Entity>,
     held_eye: Option<Vec3>,
     rest_timer: f32,
+    /// Last known stone position, so the camera can keep watching the spot
+    /// for a beat if the stone shatters (its entity despawns) on impact.
+    last_pos: Vec3,
 }
 
 /// Root entity (kinematic body; carries the frame colliders).
@@ -163,6 +166,10 @@ const SHORT_ARM: f32 = 2.8;
 const STONE_RADIUS: f32 = 0.75;
 /// Granite.
 const STONE_DENSITY: f32 = 2600.0;
+/// Joules of impact the stone can shed before it breaks apart. Tuned so a
+/// full-power head-on hit on a thick, intact wall shatters it, a moderate
+/// hit only cracks it, and field landings or glancing blows leave it whole.
+const STONE_INTEGRITY: f32 = 800_000.0;
 /// Effective angular acceleration (rad/s^2) by charge. Deliberately low:
 /// a counterweight machine accelerates ponderously (~0.5 s swing), the
 /// speed comes from the enormous 11.8 m effective arm. ~45–72 m/s.
@@ -181,6 +188,7 @@ struct TrebuchetAssets {
     dark_wood: Handle<StandardMaterial>,
     iron: Handle<StandardMaterial>,
     stone_material: Handle<StandardMaterial>,
+    stone_cracked: Handle<StandardMaterial>,
     cube: Handle<Mesh>,
     wheel: Handle<Mesh>,
     stone_mesh: Handle<Mesh>,
@@ -211,6 +219,12 @@ fn setup_assets(
         stone_material: materials.add(StandardMaterial {
             base_color: Color::srgb(0.45, 0.44, 0.42),
             perceptual_roughness: 0.9,
+            ..default()
+        }),
+        // Darker, rougher, fissured granite for a cracked or shattered stone.
+        stone_cracked: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.32, 0.30, 0.28),
+            perceptual_roughness: 0.98,
             ..default()
         }),
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
@@ -516,6 +530,13 @@ fn wind_and_loose(
                                     SweptCcd::default(),
                                 ),
                                 Projectile,
+                                BrittleStone {
+                                    integrity: STONE_INTEGRITY,
+                                    max_integrity: STONE_INTEGRITY,
+                                    radius: STONE_RADIUS,
+                                    cracked: assets.stone_cracked.clone(),
+                                    cracked_applied: false,
+                                },
                                 CollisionEventsEnabled,
                                 PreTickVelocity(velocity),
                                 TransformInterpolation,
@@ -636,6 +657,7 @@ fn trebuchet_camera(
             match stones.get(stone) {
                 Ok((stone_transform, velocity)) => {
                     let stone_pos = stone_transform.translation;
+                    shot_camera.last_pos = stone_pos;
                     // Linger after the stone slows so the collapse plays
                     // out; the timer never resets (rubble nudging the ball
                     // must not re-capture the camera).
@@ -669,9 +691,22 @@ fn trebuchet_camera(
                     Some((eye, stone_pos))
                 }
                 Err(_) => {
-                    shot_camera.following = None;
-                    shot_camera.held_eye = None;
-                    None
+                    // The stone is gone — most likely it shattered on a hard
+                    // hit. Hold on the impact spot for a beat so the break and
+                    // any collapse register, then release back to aiming.
+                    shot_camera.rest_timer += time.delta_secs();
+                    if shot_camera.rest_timer > 3.0 {
+                        shot_camera.following = None;
+                        shot_camera.held_eye = None;
+                        shot_camera.rest_timer = 0.0;
+                        None
+                    } else {
+                        let target = shot_camera.last_pos;
+                        let eye = shot_camera
+                            .held_eye
+                            .unwrap_or(target + Vec3::new(0.0, 7.0, 16.0));
+                        Some((eye, target))
+                    }
                 }
             }
         } else if let Ok(root) = trebuchets.get(active) {

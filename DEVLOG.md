@@ -1,5 +1,100 @@
 # DEVLOG
 
+## Entry #14 — 2026-06-14 — Destructible trebuchet stones
+
+Trebuchet stones can now crack and shatter when they smash into resisting
+masonry with enough force, instead of being indestructible.
+
+- **`BrittleStone` component** (`masonry.rs`): integrity in joules, plus the
+  cracked material and a radius. The trebuchet attaches it to the stone at
+  release (`STONE_INTEGRITY = 800 kJ`).
+- **Self-damage model** (in `projectile_impacts`): the stone takes damage
+  equal to the kinetic energy it actually *shed* in the collision —
+  `0.5·m·(v_pre² − v_post²)` from `PreTickVelocity` vs. the solver's
+  post-impact `LinearVelocity` — scaled by how much intact masonry backs the
+  hit (`hardness = clamp(blocks_in_radius / 10, 0.2, 1.0)`) and by
+  `STONE_SELF_FRACTION = 0.20`. So a head-on smash into a thick, well-backed
+  wall cracks (50% integrity, material swap) and shatters (≤0) it, while a
+  graze, a soft field landing, or punching a weak spot leaves it whole. The
+  logic only runs on masonry impacts, so the stone never breaks on dirt.
+- **Shatter** reuses the masonry rubble pipeline: `shatter_stone` spawns 8
+  granite chunks that inherit the post-impact velocity and spray outward as
+  `Fragment`s (so the existing budget recycles them), with a `RockCrack`
+  sound, a screen-shake bump, and the stone despawned.
+- **Chase camera**: when the followed stone shatters (its entity despawns),
+  the trebuchet camera now lingers on the impact spot for ~3 s
+  (`ShotCamera.last_pos`) instead of cutting straight back to the aim view.
+- Plumbing: bundled two of `projectile_impacts`' resources into an
+  `ImpactOut` `SystemParam` to stay under Bevy's 16-parameter system limit
+  after adding the `BrittleStone` query.
+- Verified headless (logs; the shard moment is too brief to screenshot at
+  ~0.5 fps under lavapipe): a 49–50 m/s hit on a 110+-block wall section
+  shatters the stone in one tick (~0.81–0.88 MJ self-damage), fragments
+  spawn, the stone despawns with no panic; under a lower self-fraction the
+  same hit only cracked, confirming the gradient. Tuning lives in
+  `STONE_INTEGRITY` and `STONE_SELF_FRACTION`.
+
+## Entry #13 — 2026-06-14 — Full-map GPU shader grass
+
+The Entry #12 grass (14k CPU-swayed tufts over a limited region) read as
+sparse from standing height. Replaced it with dense, full-map grass that
+sways entirely on the GPU.
+
+- **Geometry** (`grass.rs`): blades are scattered deterministically across
+  the whole grassy valley floor (region ±150 × −110..210, filtered by the
+  `grassy()` mask, the 0.1–40 m height band and slope `n.y > 0.88`) in
+  3-blade clumps at 0.6 m spacing, and baked **in world space** into one
+  merged mesh per 24 m chunk (~149 chunks, ~418k blades) so the renderer
+  frustum-culls them and the draw count stays tiny. Each vertex carries a
+  bend weight in `uv.y` (0 root → 1 tip), a per-blade phase in `uv.x`, and a
+  green shade with root-darkening AO in its vertex colour (so one white-base
+  material tints every blade — no per-shade material split).
+- **Wind shader** (`shaders/grass.wgsl` + `grass_prepass.wgsl`, both
+  embedded via `embedded_asset!` so no runtime asset path is needed): a
+  custom vertex shader layered on `StandardMaterial` through
+  `ExtendedMaterial<StandardMaterial, GrassWind>`. It mirrors bevy_pbr's mesh
+  vertex shader (non-skinned path) and adds a travelling wind offset weighted
+  by `bend²`, then hands off to the stock PBR fragment — so grass keeps full
+  shadows, atmosphere ambient and fog. Zero per-frame CPU per blade.
+- **Two gotchas, both fixed:** (1) the camera runs a depth/normal prepass
+  (SSAO + atmosphere need it), so the displacement had to be duplicated in a
+  prepass vertex shader or depth wouldn't match the forward pass. (2) The
+  prepass view layout does **not** expose the `globals` (time) binding —
+  reading `globals.time` there panicked with "group 0, binding 11 is not
+  available in the pipeline layout". Fixed by carrying time in the material's
+  own uniform (`params.z`, advanced each frame by `drive_wind`) instead of
+  `globals`, so both passes sway in lockstep off the same source.
+- Verified headless (Xvfb + lavapipe): dense carpet to the tree line with
+  per-blade sun-lit detail up close, no validation errors. Density/spacing
+  are consts (`SPACING`, `BLADES_PER_CLUMP`) to trade lushness vs. vertex
+  count; sway strength/speed live in the material uniform (`0.35 m`, `×1.0`).
+
+## Entry #12 — 2026-06-13 — Graphics pass: trees, grass, soldiers, polish
+
+Four vertical slices, each screenshot-verified.
+
+- **Branchy trees** (`vegetation.rs`): procedurally grown trunks that fork
+  through several limb generations with leaf clusters at the tips, merged
+  into per-variant meshes (a small `MeshAccum` welds transformed
+  cylinder/sphere primitives). 6 pine + 4 oak variants → ~380 trees still
+  share ~24 meshes and stay instanced. Pines get drooping needled whorls
+  and a spire; oaks fork into rounded canopies.
+- **Grass + ground** (`grass.rs`, terrain bake → 2048²): ~14k instanced
+  grass tufts (7-blade clusters sharing one mesh) carpet the grassy valley
+  floor; a travelling wind wave plus a flutter tilts each from its base so
+  the meadow ripples — one transform write per tuft.
+- **Articulated soldiers** (`soldiers.rs`): two legs + two arms on pivots
+  at hip/shoulder; `animate_limbs` runs a walk cycle (legs/arms in
+  opposing phase) while moving and an arm chop while fighting, but only
+  within 75 m of the camera — far units keep a static pose, so the ~1,150
+  army stays cheap (distance-LOD).
+- **Polish**: engine `ColorGrading` default (warmer, richer, mild midtone
+  contrast); the great-tower banner flutters; an 18-bird flock wheels over
+  the valley.
+
+Deferred: ground normal-map relief (conflicts with the 1× albedo UV — wants
+a separate tiling pass), torch smoke, GPU-shader grass for full map cover.
+
 ## Entry #11 — 2026-06-13 — Spiral stairs and the attacker swarm
 
 - **Spiral staircases** inside every manned tower: a doorway is cut in the

@@ -222,7 +222,7 @@ fn ground_color(x: f32, z: f32, height: f32, normal: Vec3) -> [f32; 4] {
 
 /// Mesh resolution (vertices per side) and albedo texture resolution.
 const MESH_RES: usize = 257;
-const TEXTURE_RES: usize = 1024;
+const TEXTURE_RES: usize = 2048;
 
 /// Bakes the ground-color function into a single albedo texture covering the
 /// whole terrain (~0.6 m/texel) — far more color detail than the mesh has
